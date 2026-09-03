@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Lanceur Grok Forge — TUI GrokNight par défaut, --plain pour le wizard bash.
+set -euo pipefail
+HERE="$(cd "$(dirname "$0")" && pwd)"
+cd "$HERE"
+
+if [[ "${1:-}" == "--plain" || "${1:-}" == "--cli" ]]; then
+  shift
+  exec bash "$HERE/setup-grok-forge.sh" "$@"
+fi
+
+if ! command -v python3 >/dev/null; then
+  echo "python3 requis pour la TUI. Fallback wizard : $0 --plain"
+  exec bash "$HERE/setup-grok-forge.sh"
+fi
+
+if ! python3 -c "import textual" >/dev/null 2>&1; then
+  echo "→ Installation de textual (TUI, même famille que Grok Build)…"
+  python3 -m pip install --user --quiet textual || {
+    echo "Impossible d'installer textual. Fallback : $0 --plain"
+    exec bash "$HERE/setup-grok-forge.sh"
+  }
+  export PATH="${HOME}/.local/bin:${PATH}"
+fi
+
+exec python3 "$HERE/forge_tui.py" "$@"
