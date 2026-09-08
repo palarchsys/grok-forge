@@ -6,6 +6,8 @@ Cible : **Ubuntu / Linux**, stacks **Python**, **npm**, ou les deux. Interface p
 
 Repo public : [palarchsys/grok-forge](https://github.com/palarchsys/grok-forge)
 
+Grok lit **`AGENTS.md` seulement** au départ : c’est un **routeur**. Les procédures vivent dans `.grok/skills/` et ne s’ouvrent que si la table le dit. Ça limite les tokens à chaque modification.
+
 ---
 
 ## Installation (une ligne)
@@ -24,7 +26,7 @@ Il va, dans l’ordre, si ce n’est pas déjà fait :
 2. Installer **GitHub CLI** (`gh`) et proposer `gh auth login`
 3. Installer **Grok Build** (`curl -fsSL https://x.ai/cli/install.sh | bash`)
 4. Proposer **uv** (Python) et **Node LTS** via fnm
-5. Cloner / mettre à jour cet outillage dans `~/.local/share/grok-forge`
+5. Cloner / **mettre à jour** (`git pull --ff-only`) cet outillage dans `~/.local/share/grok-forge`
 6. Créer la commande `grok-forge` dans `~/.local/bin`
 
 À la fin : *ouvrir le menu maintenant ?* → oui.
@@ -35,11 +37,32 @@ Les fois suivantes :
 grok-forge
 ```
 
-Grok Build seul, une fois installé :
+---
 
-```bash
-grok --version
+## Cycle
+
+```mermaid
+flowchart TB
+  I[curl install.sh] --> T[grok-forge TUI]
+  T --> N[Forger un projet]
+  T --> C[Cloner GitHub]
+  T --> L[Ouvrir local]
+  N --> F[AGENTS routeur plus skills]
+  C --> P[cadrage si manquant]
+  L --> P
+  F --> G[Grok Build]
+  P --> G
 ```
+
+```mermaid
+flowchart TB
+  Q[Modification] --> A[AGENTS.md routeur]
+  A --> S[Un skill]
+  S --> F[2 a 4 fichiers]
+  F --> D[diff petit]
+```
+
+Détail : [`docs/lifecycle.md`](docs/lifecycle.md). Carte : [`docs/map.md`](docs/map.md).
 
 ---
 
@@ -47,33 +70,31 @@ grok --version
 
 | Choix | Effet |
 | --- | --- |
-| **Forger un nouveau projet** | Assistant (nom, type, options) → **plan à approuver** → création des fichiers, venv / npm, `install.sh` du projet, repo GitHub créé ou branché, push initial |
-| **Cloner un repo de mon GitHub** | Liste tes dépôts (`gh repo list`) → clone dans `~/GrokForge/<nom>` → pose `AGENTS.md` + hook de session s’ils manquent → ouvrir Grok dans ce dossier |
-| **Ouvrir un projet local** | Liste ce qui est déjà dans `~/GrokForge` → prépare les fichiers agent si besoin → lance `grok` |
+| **Forger un nouveau projet** | Assistant (nom, type, options) → **plan à approuver** → fichiers, venv / npm, `install.sh`, **AGENTS.md routeur + skills + mermaid**, repo GitHub créé ou branché, push initial |
+| **Cloner un repo de mon GitHub** | Liste tes dépôts → clone (ou `git pull --ff-only` s’il est déjà là) → pose le cadrage **s’il manque** → ouvrir Grok |
+| **Ouvrir un projet local** | Liste `~/GrokForge` → cadrage si besoin → `grok` |
 
-Rien n’est écrit tant que tu n’as pas **approuvé le plan** (nouveau projet).
+Rien n’est écrit tant que tu n’as pas **approuvé le plan** (nouveau projet). Un `AGENTS.md` déjà présent n’est **jamais écrasé**.
 
 ---
 
 ## Types de projet
 
-1. `python-cli` — outil / service Python  
-2. `python-web` — API (FastAPI par défaut)  
-3. `npm-web` — app Node  
-4. `fullstack` — backend Python + frontend npm  
-5. `linux-system` — scripts et units systemd  
+1. `python-cli` — outil / service Python
+2. `python-web` — API (FastAPI par défaut)
+3. `npm-web` — app Node
+4. `fullstack` — backend Python + frontend npm
+5. `linux-system` — scripts et units systemd
 
-Selon le type, la forge génère notamment :
+Chaque projet reçoit notamment :
 
-- `AGENTS.md` (contrat pour Grok Build)
-- `install.sh` (réinstall depuis un clone Linux)
+- `AGENTS.md` — **routeur** (table : quelle skill ouvrir)
+- `.grok/skills/{git,session,python,npm,linux}/SKILL.md` — procédures courtes
+- `docs/lifecycle.md` — mermaid
+- `docs/map.md` — carte des fichiers
+- `install.sh` — seul point d’entrée local
 - `install.ps1` seulement si tu as coché Windows
-- `pyproject.toml`, `src/`, `tests/`, `.venv` (uv de préférence)
-- `package.json` (à la racine ou `frontend/`)
-- `.gitignore`, `.grokignore`, `.env.example`
-- `.github/workflows/ci.yml`
-- `deploy/systemd/` si pertinent
-- `.grok/hooks/session-wrap.sh`
+- socle Python / npm selon le type
 
 Les **projets** vivent dans `~/GrokForge/`.  
 L’**outillage** (ce dépôt) vit dans `~/.local/share/grok-forge`.
@@ -87,9 +108,9 @@ L’**outillage** (ce dépôt) vit dans `~/.local/share/grok-forge`.
 - Si `gh` est connecté et que tu as accepté « créer le repo » : `gh repo create` + `git push -u origin main` pour le bootstrap.
 - Ensuite le travail agent se fait sur `grok/<sujet>`, pas un force-push sur `main`.
 
-### Repo déjà existant sur ton compte
+### Repo déjà existant
 
-Menu → cloner → choisir dans la liste → `gh repo clone` dans `~/GrokForge`.  
+Menu → cloner → `gh repo clone` (ou pull si le dossier existe).  
 Le remote `origin` est déjà le bon. Grok ouvre **dans** ce dossier.
 
 ### Fin de session
@@ -98,13 +119,6 @@ Le remote `origin` est déjà le bon. Grok ouvre **dans** ce dossier.
 cd ~/GrokForge/ton-projet
 .grok/hooks/session-wrap.sh "titre court"
 ```
-
-Le hook :
-
-- écrit un rapport dans `docs/reports/`
-- crée une branche `grok/…` si tu étais sur `main`
-- commit conventionnel
-- `git push -u origin HEAD`
 
 Jamais de `--force` sur `main`. Jamais de `.env`, `.venv`, `node_modules` dans git.
 
@@ -121,19 +135,22 @@ chmod +x install.sh
 ./install.sh
 ```
 
-`install.sh` du projet installe les paquets manquants, recrée le venv Python et/ou `npm ci`.
-
 ---
 
 ## Fichiers de ce dépôt
 
 | Fichier | Rôle |
 | --- | --- |
+| `AGENTS.md` | Routeur pour Grok Build sur **ce** dépôt |
 | `install.sh` | Bootstrap unifié (Grok Build + forge), interactif |
 | `setup-grok-forge` | Lanceur TUI (`textual`) |
 | `setup-grok-forge.sh` | Backend : génération du projet, git, GitHub |
 | `forge_tui.py` | Menu GrokNight (nouveau / clone / local) |
-| `.grok/skills/forge-session/SKILL.md` | Skill de clôture de session pour Grok Build |
+| `templates/apply-framing.sh` | Pose le cadrage sans écraser |
+| `templates/project/` | AGENTS + skills + mermaid copiés dans chaque projet |
+| `.grok/skills/` | Skills de **ce** dépôt |
+| `docs/lifecycle.md` | Cycle mermaid |
+| `docs/map.md` | Carte |
 
 ---
 
@@ -150,31 +167,26 @@ Aucun secret n’est stocké dans ce dépôt. L’auth GitHub passe par `gh` sur
 
 ## Dépannage
 
-**`grok-forge` introuvable**  
+**`grok-forge` introuvable**
+
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-# ou rouvre le terminal après install (le script ajoute la ligne dans ~/.bashrc)
 ```
 
-**`grok` introuvable**  
-Relance `grok-forge` ou :
+**`grok` introuvable** — relance `grok-forge` ou :
 
 ```bash
 curl -fsSL https://x.ai/cli/install.sh | bash
 ```
 
-**La TUI ne s’ouvre pas après `curl | bash`**  
-C’est normal si le pipe n’a pas de TTY propre. Tape simplement `grok-forge`.
+**La TUI ne s’ouvre pas après `curl | bash`** — tape `grok-forge`.
 
-**`gh repo list` vide**  
+**`gh repo list` vide**
+
 ```bash
 gh auth login
 gh auth setup-git
 ```
-
-**textual manquant**  
-Le lanceur fait `pip install --user textual` tout seul. Fallback :  
-`bash ~/.local/share/grok-forge/setup-grok-forge.sh`
 
 ---
 

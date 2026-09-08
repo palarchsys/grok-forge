@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Génère un projet dans ~/GrokForge. Interactif. Aucun flag.
+# Cadrage AGENTS : templates/apply-framing.sh (routeur + skills + mermaid).
 set -euo pipefail
 ask(){ local p="$1" d="${2:-}" k="${3:-}" r
   if [[ "${FORGE_NI:-0}" == "1" && -n "$k" && -n "${!k:-}" ]]; then printf '%s' "${!k}"; return; fi
@@ -10,6 +12,7 @@ yesno(){ local p="$1" d="${2:-y}" k="${3:-}" r
   read -r -p "$p [$d] : " r || true; r="${r:-$d}"; [[ "$r" =~ ^[yYoO1]$ ]]
 }
 ok(){ printf '✔ %s\n' "$*"; }
+FORGE_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NAME="$(ask "Nom" "High-Fortress" FORGE_NAME)"; NAME="${NAME// /-}"
 PARENT="$(ask "Parent" "${HOME}/GrokForge" FORGE_PARENT)"
 ROOT="${PARENT}/${NAME}"
@@ -30,6 +33,12 @@ cd "$ROOT"
 [[ -d .git ]] || git init -b main >/dev/null
 PKG="$(printf '%s' "$NAME" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '_' | sed 's/_$//')"
 [[ -n "$PKG" ]] || PKG=app
+
+# Cadrage routeur : n'écrase pas un AGENTS.md déjà là (clone / reprise).
+if [[ -x "$FORGE_SRC/templates/apply-framing.sh" || -f "$FORGE_SRC/templates/apply-framing.sh" ]]; then
+  bash "$FORGE_SRC/templates/apply-framing.sh" "$ROOT" "$NAME" "$KINDN"
+fi
+
 cat > .gitignore <<'EOF'
 .venv/
 node_modules/
@@ -37,19 +46,23 @@ node_modules/
 __pycache__/
 .grok/sessions/
 EOF
-cat > AGENTS.md <<EOF
-# AGENTS.md — ${NAME}
-Projet **${KINDN}**. Plan Mode si plus d un fichier.
-Git: branche grok/<sujet>, Conventional Commits, pas de force-push sur main.
-Pas de secrets. Mettre a jour install.sh avec tout nouveau prerequis.
-EOF
 cat > README.md <<EOF
 # ${NAME}
+
+Forge Grok Build (${KINDN}).
+
+\`\`\`bash
 chmod +x install.sh && ./install.sh
+\`\`\`
+
+## Pour Grok Build
+
+Lis \`AGENTS.md\` seulement. C'est un routeur : un skill, pas le dépôt entier.
+Cycle : \`docs/lifecycle.md\`. Carte : \`docs/map.md\`.
 EOF
 echo '# cp .env.example .env' > .env.example
 {
-printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'cd "$(dirname "$0")"'
+printf '%s\n' '#!/usr/bin/env bash' '# Point d'"'"'entrée unique. Idempotent.' 'set -euo pipefail' 'cd "$(dirname "$0")"'
 printf '%s\n' 'if command -v apt-get >/dev/null; then'
 printf '%s\n' '  M=()'
 printf '%s\n' '  for p in git curl python3 python3-venv python3-pip; do dpkg -s "$p" >/dev/null 2>&1 || M+=("$p"); done'

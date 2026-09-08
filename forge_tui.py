@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Menu GrokNight : forger, cloner, ouvrir. Le cadrage AGENTS est dans templates/."""
 from __future__ import annotations
 import os, shutil, subprocess, sys
 from pathlib import Path
@@ -19,6 +20,7 @@ except ImportError:
     from textual.widgets.option_list import Option
 HERE = Path(__file__).resolve().parent
 BACKEND = HERE / "setup-grok-forge.sh"
+FRAME = HERE / "templates" / "apply-framing.sh"
 WORK = Path.home() / "GrokForge"
 CSS = "Screen{background:#141414;color:#e1e1e1;} Header{background:#0c0c0c;color:#bb9af7;} Footer{background:#0c0c0c;color:#6c6c6c;} #brand{color:#bb9af7;text-style:bold;padding:1 2;} .panel{border:tall #242424;background:#111111;margin:0 2 1 2;padding:1 2;} OptionList{height:12;margin:0 2 1 2;} #log{height:1fr;margin:0 2 1 2;background:#0a0a0a;}"
 def sh(cmd, cwd=None):
@@ -33,17 +35,30 @@ def gh_repos():
 def local_projects():
     WORK.mkdir(parents=True, exist_ok=True)
     return [c for c in sorted(WORK.iterdir()) if c.is_dir() and ((c/".git").exists() or (c/"AGENTS.md").exists())]
-AGENTS="""# AGENTS.md\n## Git\n- Branche grok/<sujet> hors main.\n- Pas de force-push sur main. Pas de secrets.\n- git push -u origin HEAD\n"""
-WRAP="""#!/usr/bin/env bash\nset -euo pipefail\ncd \"$(dirname \"$0\")/../..\"\nT=\"${1:-session}\"; S=\"$(date +%Y-%m-%d-%H%M)\"\nmkdir -p docs/reports\nB=\"$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)\"\nif [[ \"$B\" == main || \"$B\" == master ]]; then B=\"grok/$S\"; git checkout -b \"$B\"; fi\necho \"# $T\" > docs/reports/$S.md\ngit add -A\ngit diff --cached --quiet || git commit -m \"docs: $S $T\"\ngit remote get-url origin >/dev/null 2>&1 && git push -u origin HEAD || true\n"""
-def prepare(root: Path):
+WRAP="""#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/../.."
+T="${1:-session}"; S="$(date +%Y-%m-%d-%H%M)"
+mkdir -p docs/reports
+B="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+if [[ "$B" == main || "$B" == master ]]; then B="grok/$S"; git checkout -b "$B"; fi
+echo "# $T" > docs/reports/$S.md
+git add -A
+git diff --cached --quiet || git commit -m "docs: $S $T"
+git remote get-url origin >/dev/null 2>&1 && git push -u origin HEAD || true
+"""
+def prepare(root: Path, name: str | None = None, kind: str = "imported"):
+    """Pose le cadrage s'il manque. N'écrase jamais un AGENTS.md existant."""
     root.mkdir(parents=True, exist_ok=True)
-    if not (root/"AGENTS.md").exists():
-        (root/"AGENTS.md").write_text(AGENTS.replace("\\n","\n"))
-    h=root/".grok"/"hooks"; h.mkdir(parents=True, exist_ok=True)
-    w=h/"session-wrap.sh"
+    if FRAME.exists():
+        sh(["bash", str(FRAME), str(root), name or root.name, kind])
+    h = root / ".grok" / "hooks"
+    h.mkdir(parents=True, exist_ok=True)
+    w = h / "session-wrap.sh"
     if not w.exists():
-        w.write_text(WRAP.replace("\\n","\n")); w.chmod(0o755)
-    (root/"docs"/"reports").mkdir(parents=True, exist_ok=True)
+        w.write_text(WRAP)
+        w.chmod(0o755)
+    (root / "docs" / "reports").mkdir(parents=True, exist_ok=True)
 def launch(root: Path):
     g=shutil.which("grok")
     if not g: return
@@ -134,12 +149,13 @@ class CloneR(Screen):
         log=self.query_one("#log", RichLog)
         name=St.repo.split("/")[-1]; dest=WORK/name; WORK.mkdir(parents=True, exist_ok=True)
         if dest.exists():
-            log.write("present"); p=sh(["git","pull","--ff-only"], cwd=dest)
+            log.write("present — pull si plus recent")
+            p=sh(["git","pull","--ff-only"], cwd=dest)
         else:
             p=sh(["gh","repo","clone", St.repo, str(dest)])
         log.write((p.stdout or "")+(p.stderr or ""))
         if dest.exists():
-            prepare(dest); St.local=str(dest); log.write("ok "+str(dest))
+            prepare(dest, name=name, kind="imported"); St.local=str(dest); log.write("ok "+str(dest))
     def on_button_pressed(self, e):
         if e.button.id=="g" and St.local: launch(Path(St.local))
         else: self.app.switch_screen(Hub())
@@ -153,7 +169,8 @@ class LocalP(Screen):
         yield Footer()
     def on_option_list_option_selected(self, e):
         if e.option_id:
-            prepare(Path(e.option_id)); launch(Path(e.option_id))
+            prepare(Path(e.option_id), name=Path(e.option_id).name, kind="imported")
+            launch(Path(e.option_id))
 class ForgeApp(App):
     TITLE="Grok Forge"; CSS=CSS
     def on_mount(self):
