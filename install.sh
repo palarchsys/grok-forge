@@ -32,6 +32,7 @@ cat <<EOF
 
   Grok Forge — installateur unifie
   Grok Build + forge + clone de tes repos
+  Menu terminal (SSH-friendly)
 
 EOF
 
@@ -51,7 +52,7 @@ apt_need() {
     fi
   fi
 }
-apt_need git curl ca-certificates build-essential python3 python3-venv python3-pip python3-full unzip jq
+apt_need git curl ca-certificates build-essential python3 python3-venv python3-pip unzip jq
 
 if ! command -v gh >/dev/null 2>&1; then
   if yesno "Installer GitHub CLI ?" y; then
@@ -99,7 +100,7 @@ fi
 
 mkdir -p "$FORGE_HOME" "$FORGE_BIN" "$FORGE_WORK"
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-}")" 2>/dev/null && pwd || true)"
-if [[ -n "${SELF_DIR}" && -f "${SELF_DIR}/setup-grok-forge.sh" && -f "${SELF_DIR}/forge_tui.py" ]]; then
+if [[ -n "${SELF_DIR}" && -f "${SELF_DIR}/setup-grok-forge.sh" && -f "${SELF_DIR}/setup-grok-forge" ]]; then
   FORGE_HOME="$SELF_DIR"
   ok "Forge locale $FORGE_HOME"
 else
@@ -107,7 +108,6 @@ else
     say "Mise a jour de l'outillage"
     git -C "$FORGE_HOME" fetch --depth 1 origin "$FORGE_REF" 2>/dev/null || true
     # Clone d'outillage (pas un projet) : on ecrase chmod / restes d'install.
-    # Un pull --ff-only refuse si install.sh a ete rendu executable localement.
     if git -C "$FORGE_HOME" rev-parse --verify FETCH_HEAD >/dev/null 2>&1; then
       git -C "$FORGE_HOME" reset --hard FETCH_HEAD \
         || git -C "$FORGE_HOME" pull --ff-only || true
@@ -123,52 +123,30 @@ else
   fi
 fi
 [[ -f "$FORGE_HOME/setup-grok-forge.sh" ]] || die "setup-grok-forge.sh absent"
-# Pas de chmod sur les fichiers suivis : ca sale le clone (100644→100755)
-# et le prochain pull --ff-only refuse. python/bash n'ont pas besoin du bit +x.
+[[ -f "$FORGE_HOME/setup-grok-forge" ]] || die "setup-grok-forge absent"
 
-ensure_tui() {
-  local py="$FORGE_HOME/.venv/bin/python"
-  if [[ -x "$py" ]] && "$py" -c "import textual" >/dev/null 2>&1; then
-    return 0
-  fi
-  say "Environnement du menu (venv, pas le Python systeme)"
-  if command -v uv >/dev/null 2>&1; then
-    uv venv "$FORGE_HOME/.venv"
-    uv pip install --python "$py" textual
-  else
-    python3 -m venv "$FORGE_HOME/.venv"
-    "$FORGE_HOME/.venv/bin/pip" install -U pip textual
-  fi
-  "$FORGE_HOME/.venv/bin/python" -c "import textual" >/dev/null 2>&1 \
-    || die "textual introuvable. Installe python3-venv et relance."
-}
-ensure_tui
-FORGE_PY="$FORGE_HOME/.venv/bin/python"
+# Ancien venv textual : plus utilise. On le laisse, on n'y touche pas.
 
 cat > "$FORGE_BIN/grok-forge" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 export PATH="\$HOME/.local/bin:\$HOME/.grok/bin:\$PATH"
 FORGE_HOME="$FORGE_HOME"
-# Mise a jour silencieuse si origin/main a avance
+# Mise a jour silencieuse si origin/main a avance (clone d'outillage)
 if [[ -d "\$FORGE_HOME/.git" && -z "\${FORGE_NO_UPDATE:-}" ]]; then
   git -C "\$FORGE_HOME" fetch --quiet --depth 1 origin main 2>/dev/null || true
   LOCAL=\$(git -C "\$FORGE_HOME" rev-parse HEAD 2>/dev/null || true)
   REMOTE=\$(git -C "\$FORGE_HOME" rev-parse FETCH_HEAD 2>/dev/null || true)
   if [[ -n "\$LOCAL" && -n "\$REMOTE" && "\$LOCAL" != "\$REMOTE" ]]; then
-    git -C "\$FORGE_HOME" reset --hard FETCH_HEAD >/dev/null 2>/dev/null \
-      || git -C "\$FORGE_HOME" pull --ff-only --quiet origin main 2>/dev/null || true
+    git -C "\$FORGE_HOME" reset --hard FETCH_HEAD >/dev/null 2>/dev/null || true
   fi
 fi
-PY="\$FORGE_HOME/.venv/bin/python"
-if [[ ! -x "\$PY" ]]; then PY=python3; fi
-# Coupe un tracking souris laisse par une session precedente (SGR 1003)
-printf '\\033[?1003l\\033[?1002l\\033[?1000l\\033[?1006l\\033[?1015l' >/dev/tty 2>/dev/null || true
+MENU="\$FORGE_HOME/setup-grok-forge"
 # stdin = vrai TTY (evite le pipe de curl | bash)
 if [[ -e /dev/tty ]]; then
-  exec </dev/tty "\$PY" "\$FORGE_HOME/forge_tui.py"
+  exec </dev/tty bash "\$MENU"
 else
-  exec "\$PY" "\$FORGE_HOME/forge_tui.py"
+  exec bash "\$MENU"
 fi
 EOF
 chmod +x "$FORGE_BIN/grok-forge"
@@ -180,8 +158,7 @@ ok "Commande : grok-forge"
 
 if [[ -e /dev/tty ]]; then
   if yesno "Ouvrir le menu (forger / cloner / grok) ?" y; then
-    # stdin etait le pipe curl : on bascule sur le vrai terminal
-    exec </dev/tty "$FORGE_PY" "$FORGE_HOME/forge_tui.py"
+    exec </dev/tty bash "$FORGE_HOME/setup-grok-forge"
   fi
 fi
 say "Plus tard : grok-forge"

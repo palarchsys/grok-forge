@@ -6,7 +6,7 @@ Ouvre ce fichier seulement pour comprendre le flux. Pas pour coder.
 
 ```mermaid
 flowchart TB
-  I[curl install.sh] --> T[grok-forge TUI]
+  I[curl install.sh] --> T[grok-forge menu]
   T --> N[Forger un projet]
   T --> C[Cloner GitHub]
   T --> L[Ouvrir local]
@@ -26,8 +26,8 @@ sequenceDiagram
   participant P as Projet
   U->>I: curl bash
   I->>I: outils si besoin
-  I->>R: pull ff-only si clone existant
-  I->>M: menu
+  I->>R: reset hard si clone existant
+  I->>M: menu numerote
   alt nouveau
     M->>P: socle plus cadrage
     M->>R: create plus push

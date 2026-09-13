@@ -10,7 +10,7 @@ curl -fsSL https://raw.githubusercontent.com/palarchsys/grok-forge/main/install.
 
 Les fois suivantes : `grok-forge`. Ne pas inventer une autre séquence.
 
-`install.sh` est idempotent : outils déjà là → skip ; clone déjà là → `git pull --ff-only`.
+`install.sh` est idempotent : outils déjà là → skip ; clone déjà là → `git fetch` + `reset --hard FETCH_HEAD` (outillage seulement).
 
 ## Pendant
 

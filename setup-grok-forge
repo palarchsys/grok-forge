@@ -1,40 +1,282 @@
 #!/usr/bin/env bash
-# Lanceur Grok Forge — TUI par défaut, --plain pour le wizard bash.
+# Menu Grok Forge — terminal simple, lisible en SSH.
+# Pas d'ecran alternatif, pas de souris, pas de textual.
+# curl|bash : stdin est un pipe → on relit /dev/tty.
 set -euo pipefail
+
 HERE="$(cd "$(dirname "$0")" && pwd)"
-cd "$HERE"
+WORK="${HOME}/GrokForge"
+BACKEND="$HERE/setup-grok-forge.sh"
+FRAME="$HERE/templates/apply-framing.sh"
 
-if [[ "${1:-}" == "--plain" || "${1:-}" == "--cli" ]]; then
-  shift
-  exec bash "$HERE/setup-grok-forge.sh" "$@"
+if [[ ! -t 0 && -e /dev/tty ]]; then
+  exec </dev/tty bash "$HERE/setup-grok-forge" "$@"
 fi
 
-if ! command -v python3 >/dev/null; then
-  echo "python3 requis pour la TUI. Fallback wizard : $0 --plain"
-  exec bash "$HERE/setup-grok-forge.sh"
-fi
+TTY="/dev/tty"
+[[ -e "$TTY" ]] || TTY="/dev/stderr"
 
-PY="$HERE/.venv/bin/python"
-if [[ ! -x "$PY" ]] || ! "$PY" -c "import textual" >/dev/null 2>&1; then
-  echo "→ Environnement du menu (venv)…"
-  if command -v uv >/dev/null 2>&1; then
-    uv venv "$HERE/.venv"
-    uv pip install --python "$HERE/.venv/bin/python" textual || {
-      echo "Impossible d'installer textual. Fallback : $0 --plain"
-      exec bash "$HERE/setup-grok-forge.sh"
-    }
-  else
-    python3 -m venv "$HERE/.venv"
-    "$HERE/.venv/bin/pip" install -U pip textual || {
-      echo "Impossible d'installer textual. Fallback : $0 --plain"
-      exec bash "$HERE/setup-grok-forge.sh"
-    }
-  fi
-  PY="$HERE/.venv/bin/python"
-fi
+trap 'printf "\n" >"$TTY"; exit 0' INT
 
-if [[ -e /dev/tty ]]; then
-  exec </dev/tty "$PY" "$HERE/forge_tui.py" "$@"
+if [[ -t 1 ]] && command -v tput >/dev/null 2>&1 && tput colors >/dev/null 2>&1; then
+  BOLD=$(tput bold 2>/dev/null || true)
+  DIM=$(tput dim 2>/dev/null || true)
+  RESET=$(tput sgr0 2>/dev/null || true)
 else
-  exec "$PY" "$HERE/forge_tui.py" "$@"
+  BOLD="" DIM="" RESET=""
 fi
+
+# Affichage toujours sur le TTY : les $(...) ne capturent que les retours.
+say()  { printf '%s\n' "$*" >"$TTY"; }
+bold() { printf '%s%s%s\n' "$BOLD" "$*" "$RESET" >"$TTY"; }
+dim()  { printf '%s%s%s\n' "$DIM" "$*" "$RESET" >"$TTY"; }
+ask()  {
+  local p="$1" d="${2:-}" r
+  if [[ -n "$d" ]]; then printf '%s [%s] : ' "$p" "$d" >"$TTY"
+  else printf '%s : ' "$p" >"$TTY"; fi
+  read -r r || true
+  printf '%s' "${r:-$d}"
+}
+yesno() {
+  local p="$1" d="${2:-y}" r
+  printf '%s [%s] : ' "$p" "$d" >"$TTY"
+  read -r r || true
+  r="${r:-$d}"
+  [[ "$r" =~ ^[yYoO1]$ ]]
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+status() {
+  local g h
+  if have grok || [[ -x "${HOME}/.local/bin/grok" ]] || [[ -x "${HOME}/.grok/bin/grok" ]]; then
+    g="Grok OK"
+  else
+    g="Grok absent"
+  fi
+  if have gh && gh auth status >/dev/null 2>&1; then h="gh OK"; else h="gh absent"; fi
+  printf '%s  |  %s  |  %s' "$g" "$h" "$WORK"
+}
+
+grok_bin() {
+  if have grok; then command -v grok; return; fi
+  [[ -x "${HOME}/.local/bin/grok" ]] && { printf '%s' "${HOME}/.local/bin/grok"; return; }
+  [[ -x "${HOME}/.grok/bin/grok" ]] && { printf '%s' "${HOME}/.grok/bin/grok"; return; }
+  return 1
+}
+
+open_grok() {
+  local root="$1" g
+  if ! g=$(grok_bin); then
+    say "grok introuvable. Installe Grok Build, puis relance grok-forge."
+    return 1
+  fi
+  cd "$root"
+  exec "$g"
+}
+
+prepare() {
+  local root="$1" name="${2:-$(basename "$1")}"
+  mkdir -p "$root/docs/reports" "$root/.grok/hooks"
+  if [[ -f "$FRAME" ]]; then
+    bash "$FRAME" "$root" "$name" "imported"
+  fi
+}
+
+# stdout = ligne choisie (vide = retour). L'UI va sur le TTY.
+choose() {
+  local title="$1"
+  shift
+  local -a items=("$@")
+  local i n
+  if ((${#items[@]} == 0)); then
+    say "Aucun element."
+    return 0
+  fi
+  say ""
+  bold "$title"
+  say ""
+  i=1
+  for n in "${items[@]}"; do
+    printf '  %2d  %s\n' "$i" "$n" >"$TTY"
+    i=$((i + 1))
+  done
+  say ""
+  dim "  0   retour"
+  say ""
+  n=$(ask "Numero" "0")
+  [[ "$n" =~ ^[1-9][0-9]*$ ]] || return 0
+  (( n >= 1 && n <= ${#items[@]} )) || return 0
+  printf '%s' "${items[$((n - 1))]}"
+}
+
+header() {
+  say ""
+  say "----------------------------------------"
+  bold "  Grok Forge"
+  dim  "  $(status)"
+  say "----------------------------------------"
+}
+
+do_new() {
+  local name parent kind kindn priv gh win root
+  header
+  bold "  Forger un nouveau projet"
+  say ""
+  dim "  Depot vierge dans ~/GrokForge. Rien n'est ecrit avant ton OK."
+  say ""
+  name=$(ask "Nom du projet" "High-Fortress")
+  name="${name// /-}"
+  parent=$(ask "Dossier parent" "$WORK")
+  say ""
+  bold "  Type de projet"
+  say ""
+  say "  1  Python CLI     outil, scripts, paquet"
+  say "  2  API Python     FastAPI par defaut"
+  say "  3  npm / Vite     app Node, frontend"
+  say "  4  Fullstack      backend Python + frontend npm"
+  say "  5  Linux          scripts et units systemd"
+  say ""
+  kind=$(ask "Type" "4")
+  case "$kind" in
+    1) kindn="python-cli" ;;
+    2) kindn="python-web" ;;
+    3) kindn="npm-web" ;;
+    5) kindn="linux-system" ;;
+    *) kind=4; kindn="fullstack" ;;
+  esac
+  say ""
+  if yesno "Repo GitHub prive ?" y; then priv=y; else priv=n; fi
+  if yesno "Creer le depot GitHub et pousser le bootstrap ?" y; then gh=y; else gh=n; fi
+  if yesno "Ajouter install.ps1 (Windows) ?" n; then win=y; else win=n; fi
+  root="${parent}/${name}"
+  say ""
+  say "----------------------------------------"
+  bold "  Plan — rien n'est encore ecrit"
+  say "----------------------------------------"
+  say "  Nom      $name"
+  say "  Dossier  $root"
+  say "  Type     $kind  $kindn"
+  say "  GitHub   prive=$priv  creer+push=$gh"
+  say "  Windows  $win"
+  say "----------------------------------------"
+  say ""
+  yesno "Approuver et forger ?" y || { say "Annule."; return 0; }
+  say ""
+  dim "  Forge en cours…"
+  say ""
+  if ! FORGE_NI=1 \
+  FORGE_OVERWRITE=1 \
+  FORGE_NAME="$name" \
+  FORGE_PARENT="$parent" \
+  FORGE_KIND="$kind" \
+  FORGE_PRIVATE="$priv" \
+  FORGE_CREATE_GH="$gh" \
+  FORGE_WINDOWS="$win" \
+    bash "$BACKEND"; then
+    say "La forge a echoue."
+    return 0
+  fi
+  say ""
+  if [[ -d "$root" ]]; then
+    yesno "Ouvrir Grok dans $name ?" y && open_grok "$root"
+  fi
+}
+
+do_clone() {
+  local -a repos=()
+  local sel name dest
+  header
+  bold "  Cloner un repo GitHub"
+  say ""
+  dim "  Clone (ou pull) vers ~/GrokForge, cadrage seulement s'il manque."
+  if ! have gh; then
+    say ""
+    say "gh n'est pas installe. Relance l'installateur, ou : gh auth login"
+    return 0
+  fi
+  if ! gh auth status >/dev/null 2>&1; then
+    say ""
+    say "GitHub n'est pas connecte. Lance : gh auth login"
+    return 0
+  fi
+  mapfile -t repos < <(gh repo list --limit 80 --json nameWithOwner --jq '.[].nameWithOwner' 2>/dev/null || true)
+  if ((${#repos[@]} == 0)); then
+    say ""
+    say "Aucun repo visible."
+    return 0
+  fi
+  sel=$(choose "Tes depots" "${repos[@]}")
+  [[ -n "$sel" ]] || return 0
+  name="${sel##*/}"
+  dest="$WORK/$name"
+  mkdir -p "$WORK"
+  say ""
+  if [[ -d "$dest/.git" ]]; then
+    dim "  Deja present — git pull --ff-only"
+    git -C "$dest" pull --ff-only || true
+  else
+    dim "  Clone de $sel"
+    gh repo clone "$sel" "$dest" || { say "Echec du clone."; return 0; }
+  fi
+  prepare "$dest" "$name"
+  say "  Pret  $dest"
+  say ""
+  yesno "Ouvrir Grok dans $name ?" y && open_grok "$dest"
+}
+
+do_local() {
+  local -a projs=()
+  local d sel
+  header
+  bold "  Ouvrir un projet local"
+  say ""
+  dim "  Dossiers deja dans ~/GrokForge."
+  mkdir -p "$WORK"
+  for d in "$WORK"/*; do
+    [[ -d "$d" ]] || continue
+    if [[ -d "$d/.git" || -f "$d/AGENTS.md" ]]; then
+      projs+=("$d")
+    fi
+  done
+  if ((${#projs[@]} == 0)); then
+    say ""
+    say "Aucun projet. Forge-en un (1) ou clone un repo (2)."
+    return 0
+  fi
+  sel=$(choose "Projets locaux" "${projs[@]}")
+  [[ -n "$sel" ]] || return 0
+  prepare "$sel" "$(basename "$sel")"
+  open_grok "$sel"
+}
+
+hub() {
+  local c
+  mkdir -p "$WORK"
+  while true; do
+    header
+    say ""
+    printf '  %s1%s  Forger un nouveau projet\n' "$BOLD" "$RESET" >"$TTY"
+    dim  "     Python, npm ou fullstack — plan a valider avant ecriture."
+    say ""
+    printf '  %s2%s  Cloner un repo GitHub\n' "$BOLD" "$RESET" >"$TTY"
+    dim  "     Tes depots -> ~/GrokForge -> cadrage si manquant -> Grok."
+    say ""
+    printf '  %s3%s  Ouvrir un projet local\n' "$BOLD" "$RESET" >"$TTY"
+    dim  "     Reprendre un dossier deja present dans ~/GrokForge."
+    say ""
+    printf '  %sq%s  Quitter\n' "$BOLD" "$RESET" >"$TTY"
+    dim  "     Tes projets restent en place."
+    say ""
+    c=$(ask "Choix" "1")
+    case "$c" in
+      1) do_new ;;
+      2) do_clone ;;
+      3) do_local ;;
+      q|Q|0) say "A plus."; exit 0 ;;
+      *) say "Tape 1, 2, 3 ou q." ;;
+    esac
+  done
+}
+
+hub
