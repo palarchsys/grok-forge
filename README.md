@@ -27,7 +27,8 @@ Il va, dans l’ordre, si ce n’est pas déjà fait :
 3. Installer **Grok Build** (`curl -fsSL https://x.ai/cli/install.sh | bash`)
 4. Proposer **uv** (Python) et **Node LTS** via fnm
 5. Cloner / **mettre à jour** (`git pull --ff-only`) cet outillage dans `~/.local/share/grok-forge`
-6. Créer la commande `grok-forge` dans `~/.local/bin`
+6. Créer un **venv** pour le menu (`textual`) — jamais `pip install --user` (Ubuntu PEP 668)
+7. Créer la commande `grok-forge` dans `~/.local/bin`
 
 À la fin : *ouvrir le menu maintenant ?* → oui.
 
@@ -172,6 +173,15 @@ Aucun secret n’est stocké dans ce dépôt. L’auth GitHub passe par `gh` sur
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
+
+**`externally-managed-environment` / `No module named 'textual'`**  
+Ubuntu 26.04 bloque `pip install --user`. Relance l’installateur : le menu vit dans son propre venv (`~/.local/share/grok-forge/.venv`).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/palarchsys/grok-forge/main/install.sh | bash
+```
+
+Puis `grok-forge`.
 
 **`grok` introuvable** — relance `grok-forge` ou :
 

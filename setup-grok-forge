@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Lanceur Grok Forge — TUI GrokNight par défaut, --plain pour le wizard bash.
+# Lanceur Grok Forge — TUI par défaut, --plain pour le wizard bash.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
@@ -14,13 +14,23 @@ if ! command -v python3 >/dev/null; then
   exec bash "$HERE/setup-grok-forge.sh"
 fi
 
-if ! python3 -c "import textual" >/dev/null 2>&1; then
-  echo "→ Installation de textual (TUI, même famille que Grok Build)…"
-  python3 -m pip install --user --quiet textual || {
-    echo "Impossible d'installer textual. Fallback : $0 --plain"
-    exec bash "$HERE/setup-grok-forge.sh"
-  }
-  export PATH="${HOME}/.local/bin:${PATH}"
+PY="$HERE/.venv/bin/python"
+if [[ ! -x "$PY" ]] || ! "$PY" -c "import textual" >/dev/null 2>&1; then
+  echo "→ Environnement du menu (venv)…"
+  if command -v uv >/dev/null 2>&1; then
+    uv venv "$HERE/.venv"
+    uv pip install --python "$HERE/.venv/bin/python" textual || {
+      echo "Impossible d'installer textual. Fallback : $0 --plain"
+      exec bash "$HERE/setup-grok-forge.sh"
+    }
+  else
+    python3 -m venv "$HERE/.venv"
+    "$HERE/.venv/bin/pip" install -U pip textual || {
+      echo "Impossible d'installer textual. Fallback : $0 --plain"
+      exec bash "$HERE/setup-grok-forge.sh"
+    }
+  fi
+  PY="$HERE/.venv/bin/python"
 fi
 
-exec python3 "$HERE/forge_tui.py" "$@"
+exec "$PY" "$HERE/forge_tui.py" "$@"

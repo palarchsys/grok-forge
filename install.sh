@@ -26,7 +26,7 @@ FORGE_BIN="${HOME}/.local/bin"
 FORGE_WORK="${HOME}/GrokForge"
 FORGE_REF="main"
 FORGE_REPO_DEFAULT="https://github.com/palarchsys/grok-forge.git"
-export PATH="${FORGE_BIN}:${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+export PATH="${FORGE_BIN}:${HOME}/.local/bin:${HOME}/.grok/bin:${HOME}/.cargo/bin:${PATH}"
 
 cat <<EOF
 
@@ -51,7 +51,7 @@ apt_need() {
     fi
   fi
 }
-apt_need git curl ca-certificates build-essential python3 python3-venv python3-pip unzip jq
+apt_need git curl ca-certificates build-essential python3 python3-venv python3-pip python3-full unzip jq
 
 if ! command -v gh >/dev/null 2>&1; then
   if yesno "Installer GitHub CLI ?" y; then
@@ -74,8 +74,12 @@ if command -v grok >/dev/null 2>&1; then
 else
   if yesno "Installer Grok Build ?" y; then
     curl -fsSL https://x.ai/cli/install.sh | bash
-    export PATH="${HOME}/.local/bin:${PATH}"
-    command -v grok >/dev/null && ok "Grok Build installe" || say "Ouvre un nouveau terminal si grok est introuvable."
+    export PATH="${HOME}/.local/bin:${HOME}/.grok/bin:${PATH}"
+    if command -v grok >/dev/null; then
+      ok "Grok Build installe — on continue grok-forge"
+    else
+      say "Grok Build : ouvre un nouveau terminal si la commande grok est introuvable."
+    fi
   fi
 fi
 
@@ -100,14 +104,11 @@ if [[ -n "${SELF_DIR}" && -f "${SELF_DIR}/setup-grok-forge.sh" && -f "${SELF_DIR
   ok "Forge locale $FORGE_HOME"
 else
   if [[ -d "$FORGE_HOME/.git" ]]; then
-    say "Mise a jour $FORGE_HOME"
+    say "Mise a jour de l'outillage"
     git -C "$FORGE_HOME" pull --ff-only || true
   else
-    # Outillage public (menu grok-forge). PAS l'URL d'un projet utilisateur.
     REPO="${FORGE_REPO:-$FORGE_REPO_DEFAULT}"
     say "Telechargement de l'outillage Grok Forge"
-    say "  $REPO"
-    say "(ce n'est pas l'URL de tes projets — Entrée / défaut suffisait)"
     git clone --depth 1 --branch "$FORGE_REF" "$REPO" "$FORGE_HOME" \
       || git clone --depth 1 "$REPO" "$FORGE_HOME" \
       || die "clone outillage impossible. Verifie le reseau."
@@ -117,11 +118,32 @@ fi
 chmod +x "$FORGE_HOME"/setup-grok-forge.sh "$FORGE_HOME"/install.sh "$FORGE_HOME"/forge_tui.py 2>/dev/null || true
 [[ -f "$FORGE_HOME/setup-grok-forge" ]] && chmod +x "$FORGE_HOME/setup-grok-forge"
 
+ensure_tui() {
+  local py="$FORGE_HOME/.venv/bin/python"
+  if [[ -x "$py" ]] && "$py" -c "import textual" >/dev/null 2>&1; then
+    return 0
+  fi
+  say "Environnement du menu (venv, pas le Python systeme)"
+  if command -v uv >/dev/null 2>&1; then
+    uv venv "$FORGE_HOME/.venv"
+    uv pip install --python "$py" textual
+  else
+    python3 -m venv "$FORGE_HOME/.venv"
+    "$FORGE_HOME/.venv/bin/pip" install -U pip textual
+  fi
+  "$FORGE_HOME/.venv/bin/python" -c "import textual" >/dev/null 2>&1 \
+    || die "textual introuvable. Installe python3-venv et relance."
+}
+ensure_tui
+FORGE_PY="$FORGE_HOME/.venv/bin/python"
+
 cat > "$FORGE_BIN/grok-forge" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-export PATH="\$HOME/.local/bin:\$PATH"
-exec python3 "$FORGE_HOME/forge_tui.py"
+export PATH="\$HOME/.local/bin:\$HOME/.grok/bin:\$PATH"
+PY="$FORGE_HOME/.venv/bin/python"
+if [[ ! -x "\$PY" ]]; then PY=python3; fi
+exec "\$PY" "$FORGE_HOME/forge_tui.py"
 EOF
 chmod +x "$FORGE_BIN/grok-forge"
 if [[ -f "${HOME}/.bashrc" ]] && ! grep -q 'HOME/.local/bin' "${HOME}/.bashrc" 2>/dev/null; then
@@ -132,7 +154,7 @@ ok "Commande : grok-forge"
 
 if [[ -e /dev/tty ]]; then
   if yesno "Ouvrir le menu (forger / cloner / grok) ?" y; then
-    exec python3 "$FORGE_HOME/forge_tui.py"
+    exec "$FORGE_PY" "$FORGE_HOME/forge_tui.py"
   fi
 fi
 say "Plus tard : grok-forge"

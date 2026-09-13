@@ -3,22 +3,37 @@
 from __future__ import annotations
 import os, shutil, subprocess, sys
 from pathlib import Path
-try:
-    from textual.app import App, ComposeResult
-    from textual.binding import Binding
-    from textual.containers import Horizontal
-    from textual.screen import Screen
-    from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, OptionList, RichLog, Static
-    from textual.widgets.option_list import Option
-except ImportError:
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", "textual"])
-    from textual.app import App, ComposeResult
-    from textual.binding import Binding
-    from textual.containers import Horizontal
-    from textual.screen import Screen
-    from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, OptionList, RichLog, Static
-    from textual.widgets.option_list import Option
+
 HERE = Path(__file__).resolve().parent
+VENV_PY = HERE / ".venv" / "bin" / "python"
+
+def _ensure_textual() -> None:
+    """Ubuntu PEP 668 : jamais pip --user sur le Python systeme. Venv local."""
+    try:
+        import textual  # noqa: F401
+        return
+    except ImportError:
+        pass
+    venv_dir = HERE / ".venv"
+    if not VENV_PY.exists():
+        uv = shutil.which("uv")
+        if uv:
+            subprocess.check_call([uv, "venv", str(venv_dir)])
+            subprocess.check_call([uv, "pip", "install", "--python", str(VENV_PY), "textual"])
+        else:
+            subprocess.check_call([sys.executable, "-m", "venv", str(venv_dir)])
+            subprocess.check_call([str(venv_dir / "bin" / "pip"), "install", "-U", "pip", "textual"])
+    else:
+        subprocess.check_call([str(venv_dir / "bin" / "pip"), "install", "textual"])
+    os.execv(str(VENV_PY), [str(VENV_PY), str(Path(__file__).resolve()), *sys.argv[1:]])
+
+_ensure_textual()
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal
+from textual.screen import Screen
+from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, OptionList, RichLog, Static
+from textual.widgets.option_list import Option
 BACKEND = HERE / "setup-grok-forge.sh"
 FRAME = HERE / "templates" / "apply-framing.sh"
 WORK = Path.home() / "GrokForge"
@@ -60,9 +75,16 @@ def prepare(root: Path, name: str | None = None, kind: str = "imported"):
         w.chmod(0o755)
     (root / "docs" / "reports").mkdir(parents=True, exist_ok=True)
 def launch(root: Path):
-    g=shutil.which("grok")
-    if not g: return
-    os.chdir(root); os.execvp(g,[g])
+    g = shutil.which("grok")
+    if not g:
+        for c in (Path.home() / ".local" / "bin" / "grok", Path.home() / ".grok" / "bin" / "grok"):
+            if c.is_file():
+                g = str(c)
+                break
+    if not g:
+        return
+    os.chdir(root)
+    os.execvp(g, [g])
 class St:
     name="High-Fortress"; parent=str(WORK); kind="4"
     windows=False; private=True; tools=True; create_gh=True
