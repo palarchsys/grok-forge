@@ -141,9 +141,26 @@ cat > "$FORGE_BIN/grok-forge" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 export PATH="\$HOME/.local/bin:\$HOME/.grok/bin:\$PATH"
-PY="$FORGE_HOME/.venv/bin/python"
+FORGE_HOME="$FORGE_HOME"
+# Mise a jour silencieuse si origin/main a avance
+if [[ -d "\$FORGE_HOME/.git" && -z "\${FORGE_NO_UPDATE:-}" ]]; then
+  git -C "\$FORGE_HOME" fetch --quiet --depth 1 origin main 2>/dev/null || true
+  LOCAL=\$(git -C "\$FORGE_HOME" rev-parse HEAD 2>/dev/null || true)
+  REMOTE=\$(git -C "\$FORGE_HOME" rev-parse FETCH_HEAD 2>/dev/null || true)
+  if [[ -n "\$LOCAL" && -n "\$REMOTE" && "\$LOCAL" != "\$REMOTE" ]]; then
+    git -C "\$FORGE_HOME" pull --ff-only --quiet origin main 2>/dev/null || true
+  fi
+fi
+PY="\$FORGE_HOME/.venv/bin/python"
 if [[ ! -x "\$PY" ]]; then PY=python3; fi
-exec "\$PY" "$FORGE_HOME/forge_tui.py"
+# Coupe un tracking souris laisse par une session precedente (SGR 1003)
+printf '\\033[?1003l\\033[?1002l\\033[?1000l\\033[?1006l\\033[?1015l' >/dev/tty 2>/dev/null || true
+# stdin = vrai TTY (evite le pipe de curl | bash)
+if [[ -e /dev/tty ]]; then
+  exec </dev/tty "\$PY" "\$FORGE_HOME/forge_tui.py"
+else
+  exec "\$PY" "\$FORGE_HOME/forge_tui.py"
+fi
 EOF
 chmod +x "$FORGE_BIN/grok-forge"
 if [[ -f "${HOME}/.bashrc" ]] && ! grep -q 'HOME/.local/bin' "${HOME}/.bashrc" 2>/dev/null; then
@@ -154,7 +171,8 @@ ok "Commande : grok-forge"
 
 if [[ -e /dev/tty ]]; then
   if yesno "Ouvrir le menu (forger / cloner / grok) ?" y; then
-    exec "$FORGE_PY" "$FORGE_HOME/forge_tui.py"
+    # stdin etait le pipe curl : on bascule sur le vrai terminal
+    exec </dev/tty "$FORGE_PY" "$FORGE_HOME/forge_tui.py"
   fi
 fi
 say "Plus tard : grok-forge"

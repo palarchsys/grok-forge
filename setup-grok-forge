@@ -33,4 +33,8 @@ if [[ ! -x "$PY" ]] || ! "$PY" -c "import textual" >/dev/null 2>&1; then
   PY="$HERE/.venv/bin/python"
 fi
 
-exec "$PY" "$HERE/forge_tui.py" "$@"
+if [[ -e /dev/tty ]]; then
+  exec </dev/tty "$PY" "$HERE/forge_tui.py" "$@"
+else
+  exec "$PY" "$HERE/forge_tui.py" "$@"
+fi

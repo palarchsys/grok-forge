@@ -1,11 +1,52 @@
 #!/usr/bin/env python3
-"""Menu GrokNight : forger, cloner, ouvrir. Le cadrage AGENTS est dans templates/."""
+"""Menu GrokNight : forger, cloner, ouvrir. Le cadrage AGENTS est dans templates/.
+
+Souris volontairement coupee : GNOME Terminal + mode 1003 envoie des
+sequences SGR `CSI < 35 ; x ; y M` (mouvement). Si elles ne sont pas
+parsees, elles s'affichent en clair dans le Header et saturent stdin —
+plus aucune touche n'arrive au menu.
+"""
 from __future__ import annotations
-import os, shutil, subprocess, sys
+import atexit, os, shutil, subprocess, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 VENV_PY = HERE / ".venv" / "bin" / "python"
+# DECSET mouse : 1000 clic, 1002 drag, 1003 tout mouvement, 1006 SGR, 1015 urxvt
+_MOUSE_OFF = "\033[?1003l\033[?1002l\033[?1000l\033[?1006l\033[?1015l\033[?1005l"
+
+
+def _mouse_off() -> None:
+    try:
+        fd = os.open("/dev/tty", os.O_WRONLY)
+        os.write(fd, _MOUSE_OFF.encode())
+        os.close(fd)
+    except OSError:
+        try:
+            sys.stdout.write(_MOUSE_OFF)
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+
+def _bind_tty() -> None:
+    """curl|bash laisse stdin sur le pipe : le TUI doit lire /dev/tty."""
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        return
+    try:
+        fd = os.open("/dev/tty", os.O_RDWR)
+    except OSError:
+        print("Lance grok-forge dans un terminal (GNOME, kitty, foot…).", file=sys.stderr)
+        sys.exit(1)
+    if not sys.stdin.isatty():
+        os.dup2(fd, 0)
+    if not sys.stdout.isatty():
+        os.dup2(fd, 1)
+    if not sys.stderr.isatty():
+        os.dup2(fd, 2)
+    if fd not in (0, 1, 2):
+        os.close(fd)
+
 
 def _ensure_textual() -> None:
     """Ubuntu PEP 668 : jamais pip --user sur le Python systeme. Venv local."""
@@ -27,30 +68,56 @@ def _ensure_textual() -> None:
         subprocess.check_call([str(venv_dir / "bin" / "pip"), "install", "textual"])
     os.execv(str(VENV_PY), [str(VENV_PY), str(Path(__file__).resolve()), *sys.argv[1:]])
 
+
+_bind_tty()
+_mouse_off()
+atexit.register(_mouse_off)
 _ensure_textual()
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, OptionList, RichLog, Static
 from textual.widgets.option_list import Option
+
 BACKEND = HERE / "setup-grok-forge.sh"
 FRAME = HERE / "templates" / "apply-framing.sh"
 WORK = Path.home() / "GrokForge"
-CSS = "Screen{background:#141414;color:#e1e1e1;} Header{background:#0c0c0c;color:#bb9af7;} Footer{background:#0c0c0c;color:#6c6c6c;} #brand{color:#bb9af7;text-style:bold;padding:1 2;} .panel{border:tall #242424;background:#111111;margin:0 2 1 2;padding:1 2;} OptionList{height:12;margin:0 2 1 2;} #log{height:1fr;margin:0 2 1 2;background:#0a0a0a;}"
+CSS = """
+Screen { background: #141414; color: #e1e1e1; }
+Header { background: #0c0c0c; color: #bb9af7; }
+Footer { background: #0c0c0c; color: #6c6c6c; }
+#brand { color: #bb9af7; text-style: bold; padding: 1 2; }
+.panel { border: tall #242424; background: #111111; margin: 0 2 1 2; padding: 1 2; }
+#hint { color: #8a8a8a; padding: 0 2 1 2; }
+OptionList { height: 12; margin: 0 2 1 2; }
+OptionList:focus { border: tall #7aa2f7; }
+#log { height: 1fr; margin: 0 2 1 2; background: #0a0a0a; }
+"""
+
+
 def sh(cmd, cwd=None):
     return subprocess.run(cmd, cwd=cwd, text=True, capture_output=True)
+
+
 def which(n):
     return shutil.which(n) is not None
+
+
 def gh_repos():
     if not which("gh"):
         return []
-    p = sh(["gh","repo","list","--limit","80","--json","nameWithOwner","--jq",".[].nameWithOwner"])
-    return [x.strip() for x in p.stdout.splitlines() if x.strip()] if p.returncode==0 else []
+    p = sh(["gh", "repo", "list", "--limit", "80", "--json", "nameWithOwner", "--jq", ".[].nameWithOwner"])
+    return [x.strip() for x in p.stdout.splitlines() if x.strip()] if p.returncode == 0 else []
+
+
 def local_projects():
     WORK.mkdir(parents=True, exist_ok=True)
-    return [c for c in sorted(WORK.iterdir()) if c.is_dir() and ((c/".git").exists() or (c/"AGENTS.md").exists())]
-WRAP="""#!/usr/bin/env bash
+    return [c for c in sorted(WORK.iterdir()) if c.is_dir() and ((c / ".git").exists() or (c / "AGENTS.md").exists())]
+
+
+WRAP = """#!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 T="${1:-session}"; S="$(date +%Y-%m-%d-%H%M)"
@@ -62,6 +129,8 @@ git add -A
 git diff --cached --quiet || git commit -m "docs: $S $T"
 git remote get-url origin >/dev/null 2>&1 && git push -u origin HEAD || true
 """
+
+
 def prepare(root: Path, name: str | None = None, kind: str = "imported"):
     """Pose le cadrage s'il manque. N'écrase jamais un AGENTS.md existant."""
     root.mkdir(parents=True, exist_ok=True)
@@ -74,7 +143,10 @@ def prepare(root: Path, name: str | None = None, kind: str = "imported"):
         w.write_text(WRAP)
         w.chmod(0o755)
     (root / "docs" / "reports").mkdir(parents=True, exist_ok=True)
+
+
 def launch(root: Path):
+    _mouse_off()
     g = shutil.which("grok")
     if not g:
         for c in (Path.home() / ".local" / "bin" / "grok", Path.home() / ".grok" / "bin" / "grok"):
@@ -85,31 +157,88 @@ def launch(root: Path):
         return
     os.chdir(root)
     os.execvp(g, [g])
+
+
+def _focus_list(screen: Screen, wid: str = "#menu") -> None:
+    try:
+        menu = screen.query_one(wid, OptionList)
+        menu.focus()
+        if menu.option_count:
+            menu.highlighted = 0
+    except Exception:
+        pass
+
+
 class St:
-    name="High-Fortress"; parent=str(WORK); kind="4"
-    windows=False; private=True; tools=True; create_gh=True
-    repo=""; local=""
+    name = "High-Fortress"
+    parent = str(WORK)
+    kind = "4"
+    windows = False
+    private = True
+    tools = True
+    create_gh = True
+    repo = ""
+    local = ""
+
+
 class Hub(Screen):
-    BINDINGS=[Binding("q","app.quit","Quitter")]
+    BINDINGS = [
+        Binding("q", "app.quit", "Quitter"),
+        Binding("1", "go_new", "Forger", show=False),
+        Binding("2", "go_clone", "Cloner", show=False),
+        Binding("3", "go_local", "Local", show=False),
+    ]
+
     def compose(self):
         yield Header(show_clock=True)
         yield Label("Grok Forge", id="brand")
-        g="Grok OK" if which("grok") else "Grok absent"
-        h="gh OK" if which("gh") else "gh absent"
-        yield Static(f"{g} | {h} | {WORK}", classes="panel")
-        yield OptionList(Option("Forger un nouveau projet",id="new"), Option("Cloner un repo GitHub et ouvrir Grok",id="clone"), Option("Ouvrir un projet local",id="local"), Option("Quitter",id="quit"), id="menu")
+        g = "Grok OK" if which("grok") else "Grok absent"
+        h = "gh OK" if which("gh") else "gh absent"
+        yield Static(f"{g}  |  {h}  |  {WORK}", classes="panel")
+        yield Static("Clavier : fleches + Entree.  1 forger  2 cloner  3 local  Q quitter.", id="hint")
+        yield OptionList(
+            Option("Forger un nouveau projet", id="new"),
+            Option("Cloner un repo GitHub et ouvrir Grok", id="clone"),
+            Option("Ouvrir un projet local", id="local"),
+            Option("Quitter", id="quit"),
+            id="menu",
+        )
         yield Footer()
+
+    def on_mount(self):
+        _focus_list(self)
+
     def on_option_list_option_selected(self, e):
-        i=e.option_id
-        if i=="new": self.app.push_screen(Form())
-        elif i=="clone": self.app.push_screen(CloneP())
-        elif i=="local": self.app.push_screen(LocalP())
-        else: self.app.exit()
+        i = e.option_id
+        if i == "new":
+            self.app.push_screen(Form())
+        elif i == "clone":
+            self.app.push_screen(CloneP())
+        elif i == "local":
+            self.app.push_screen(LocalP())
+        else:
+            self.app.exit()
+
+    def action_go_new(self):
+        self.app.push_screen(Form())
+
+    def action_go_clone(self):
+        self.app.push_screen(CloneP())
+
+    def action_go_local(self):
+        self.app.push_screen(LocalP())
+
+
 class Form(Screen):
-    BINDINGS=[Binding("escape","app.pop_screen","Retour")]
+    BINDINGS = [
+        Binding("escape", "app.pop_screen", "Retour"),
+        Binding("ctrl+s", "submit", "Forger"),
+    ]
+
     def compose(self):
-        yield Header(); yield Label("Nouveau projet", id="brand")
-        yield Static("Remplis puis Approuver", classes="panel")
+        yield Header()
+        yield Label("Nouveau projet", id="brand")
+        yield Static("Tab pour circuler. Ctrl+S ou bouton pour approuver.", classes="panel")
         yield Input(St.name, id="name")
         yield Input(St.parent, id="parent")
         yield Input(St.kind, id="kind")
@@ -117,86 +246,209 @@ class Form(Screen):
         yield Checkbox("Creer GitHub + push", St.create_gh, id="gh")
         yield Checkbox("Installer outils", St.tools, id="tools")
         yield Checkbox("install.ps1", St.windows, id="win")
-        yield Button("Approuver et forger", id="go"); yield Footer()
-    def on_button_pressed(self, e):
-        St.name=self.query_one("#name", Input).value.strip() or St.name
-        St.parent=self.query_one("#parent", Input).value.strip() or St.parent
-        St.kind=self.query_one("#kind", Input).value.strip() or "4"
-        St.private=self.query_one("#priv", Checkbox).value
-        St.create_gh=self.query_one("#gh", Checkbox).value
-        St.tools=self.query_one("#tools", Checkbox).value
-        St.windows=self.query_one("#win", Checkbox).value
-        self.app.push_screen(RunN())
-class RunN(Screen):
-    BINDINGS=[Binding("g","grok","Grok")]
-    def compose(self):
-        yield Header(); yield Label("Forge", id="brand")
-        yield RichLog(id="log"); yield Horizontal(Button("Ouvrir Grok", id="g"), Button("Menu", id="m")); yield Footer()
-    def on_mount(self):
-        self.run_worker(self._run, exclusive=True)
-    def _env(self):
-        e=os.environ.copy(); yn=lambda b: "y" if b else "n"
-        e.update(FORGE_NI="1", FORGE_OVERWRITE="1", FORGE_NAME=St.name, FORGE_PARENT=St.parent, FORGE_KIND=St.kind, FORGE_PY_FW="fastapi", FORGE_NPM_FW="vite", FORGE_WINDOWS=yn(St.windows), FORGE_PRIVATE=yn(St.private), FORGE_INSTALL_TOOLS=yn(St.tools), FORGE_CREATE_GH=yn(St.create_gh), FORGE_GH_LOGIN="n", FORGE_GROK_INSPECT="n", FORGE_OPEN_GROK="n")
-        return e
-    def _run(self):
-        log=self.query_one("#log", RichLog)
-        if not BACKEND.exists():
-            log.write("backend manquant"); return
-        p=subprocess.Popen(["bash", str(BACKEND)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=self._env())
-        for line in p.stdout: log.write(line.rstrip())
-        log.write("exit %s"%p.wait())
-    def on_button_pressed(self, e):
-        if e.button.id=="g": launch(Path(St.parent)/St.name)
-        else: self.app.switch_screen(Hub())
-    def action_grok(self):
-        launch(Path(St.parent)/St.name)
-class CloneP(Screen):
-    BINDINGS=[Binding("escape","app.pop_screen","Retour")]
-    def compose(self):
-        yield Header(); yield Label("Repos GitHub", id="brand")
-        rs=gh_repos()
-        if not rs: yield Static("Aucun repo. Connecte gh.", classes="panel")
-        else: yield OptionList(*[Option(r,id=r) for r in rs], id="r")
+        yield Button("Approuver et forger", id="go")
         yield Footer()
-    def on_option_list_option_selected(self, e):
-        St.repo=e.option_id or ""
-        if St.repo: self.app.push_screen(CloneR())
-class CloneR(Screen):
+
+    def on_mount(self):
+        try:
+            self.query_one("#name", Input).focus()
+        except Exception:
+            pass
+
+    def _go(self):
+        St.name = self.query_one("#name", Input).value.strip() or St.name
+        St.parent = self.query_one("#parent", Input).value.strip() or St.parent
+        St.kind = self.query_one("#kind", Input).value.strip() or "4"
+        St.private = self.query_one("#priv", Checkbox).value
+        St.create_gh = self.query_one("#gh", Checkbox).value
+        St.tools = self.query_one("#tools", Checkbox).value
+        St.windows = self.query_one("#win", Checkbox).value
+        self.app.push_screen(RunN())
+
+    def on_button_pressed(self, e):
+        if e.button.id == "go":
+            self._go()
+
+    def action_submit(self):
+        self._go()
+
+
+class RunN(Screen):
+    BINDINGS = [Binding("g", "grok", "Grok"), Binding("escape", "menu", "Menu")]
+
     def compose(self):
-        yield Header(); yield Label("Clone "+St.repo, id="brand")
-        yield RichLog(id="log"); yield Horizontal(Button("Ouvrir Grok", id="g"), Button("Menu", id="m")); yield Footer()
+        yield Header()
+        yield Label("Forge", id="brand")
+        yield RichLog(id="log")
+        yield Horizontal(Button("Ouvrir Grok", id="g"), Button("Menu", id="m"))
+        yield Footer()
+
     def on_mount(self):
         self.run_worker(self._run, exclusive=True)
+
+    def _env(self):
+        e = os.environ.copy()
+        yn = lambda b: "y" if b else "n"
+        e.update(
+            FORGE_NI="1",
+            FORGE_OVERWRITE="1",
+            FORGE_NAME=St.name,
+            FORGE_PARENT=St.parent,
+            FORGE_KIND=St.kind,
+            FORGE_PY_FW="fastapi",
+            FORGE_NPM_FW="vite",
+            FORGE_WINDOWS=yn(St.windows),
+            FORGE_PRIVATE=yn(St.private),
+            FORGE_INSTALL_TOOLS=yn(St.tools),
+            FORGE_CREATE_GH=yn(St.create_gh),
+            FORGE_GH_LOGIN="n",
+            FORGE_GROK_INSPECT="n",
+            FORGE_OPEN_GROK="n",
+        )
+        return e
+
     def _run(self):
-        log=self.query_one("#log", RichLog)
-        name=St.repo.split("/")[-1]; dest=WORK/name; WORK.mkdir(parents=True, exist_ok=True)
+        log = self.query_one("#log", RichLog)
+        if not BACKEND.exists():
+            log.write("backend manquant")
+            return
+        p = subprocess.Popen(
+            ["bash", str(BACKEND)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=self._env(),
+        )
+        for line in p.stdout:
+            log.write(line.rstrip())
+        log.write("exit %s" % p.wait())
+
+    def on_button_pressed(self, e):
+        if e.button.id == "g":
+            launch(Path(St.parent) / St.name)
+        else:
+            self.app.switch_screen(Hub())
+
+    def action_grok(self):
+        launch(Path(St.parent) / St.name)
+
+    def action_menu(self):
+        self.app.switch_screen(Hub())
+
+
+class CloneP(Screen):
+    BINDINGS = [Binding("escape", "app.pop_screen", "Retour")]
+
+    def compose(self):
+        yield Header()
+        yield Label("Repos GitHub", id="brand")
+        yield Static("Fleches + Entree. Echap pour revenir.", id="hint")
+        rs = gh_repos()
+        if not rs:
+            yield Static("Aucun repo. Connecte gh.", classes="panel")
+        else:
+            yield OptionList(*[Option(r, id=r) for r in rs], id="menu")
+        yield Footer()
+
+    def on_mount(self):
+        _focus_list(self)
+
+    def on_option_list_option_selected(self, e):
+        St.repo = e.option_id or ""
+        if St.repo:
+            self.app.push_screen(CloneR())
+
+
+class CloneR(Screen):
+    BINDINGS = [Binding("g", "grok", "Grok"), Binding("escape", "menu", "Menu")]
+
+    def compose(self):
+        yield Header()
+        yield Label("Clone " + St.repo, id="brand")
+        yield RichLog(id="log")
+        yield Horizontal(Button("Ouvrir Grok", id="g"), Button("Menu", id="m"))
+        yield Footer()
+
+    def on_mount(self):
+        self.run_worker(self._run, exclusive=True)
+
+    def _run(self):
+        log = self.query_one("#log", RichLog)
+        name = St.repo.split("/")[-1]
+        dest = WORK / name
+        WORK.mkdir(parents=True, exist_ok=True)
         if dest.exists():
             log.write("present — pull si plus recent")
-            p=sh(["git","pull","--ff-only"], cwd=dest)
+            p = sh(["git", "pull", "--ff-only"], cwd=dest)
         else:
-            p=sh(["gh","repo","clone", St.repo, str(dest)])
-        log.write((p.stdout or "")+(p.stderr or ""))
+            p = sh(["gh", "repo", "clone", St.repo, str(dest)])
+        log.write((p.stdout or "") + (p.stderr or ""))
         if dest.exists():
-            prepare(dest, name=name, kind="imported"); St.local=str(dest); log.write("ok "+str(dest))
+            prepare(dest, name=name, kind="imported")
+            St.local = str(dest)
+            log.write("ok " + str(dest))
+
     def on_button_pressed(self, e):
-        if e.button.id=="g" and St.local: launch(Path(St.local))
-        else: self.app.switch_screen(Hub())
+        if e.button.id == "g" and St.local:
+            launch(Path(St.local))
+        else:
+            self.app.switch_screen(Hub())
+
+    def action_grok(self):
+        if St.local:
+            launch(Path(St.local))
+
+    def action_menu(self):
+        self.app.switch_screen(Hub())
+
+
 class LocalP(Screen):
-    BINDINGS=[Binding("escape","app.pop_screen","Retour")]
+    BINDINGS = [Binding("escape", "app.pop_screen", "Retour")]
+
     def compose(self):
-        yield Header(); yield Label("Local", id="brand")
-        ps=local_projects()
-        if not ps: yield Static("Vide", classes="panel")
-        else: yield OptionList(*[Option(str(p),id=str(p)) for p in ps])
+        yield Header()
+        yield Label("Local", id="brand")
+        yield Static("Fleches + Entree. Echap pour revenir.", id="hint")
+        ps = local_projects()
+        if not ps:
+            yield Static("Vide", classes="panel")
+        else:
+            yield OptionList(*[Option(str(p), id=str(p)) for p in ps], id="menu")
         yield Footer()
+
+    def on_mount(self):
+        _focus_list(self)
+
     def on_option_list_option_selected(self, e):
         if e.option_id:
             prepare(Path(e.option_id), name=Path(e.option_id).name, kind="imported")
             launch(Path(e.option_id))
+
+
 class ForgeApp(App):
-    TITLE="Grok Forge"; CSS=CSS
+    TITLE = "Grok Forge"
+    CSS = CSS
+    ENABLE_COMMAND_PALETTE = False
+
     def on_mount(self):
         self.push_screen(Hub())
-if __name__=="__main__":
+
+    def on_unmount(self):
+        _mouse_off()
+
+
+def _run() -> None:
+    _mouse_off()
     WORK.mkdir(parents=True, exist_ok=True)
-    ForgeApp().run()
+    app = ForgeApp()
+    try:
+        app.run(mouse=False)
+    except TypeError:
+        # textual trop vieux pour l'argument mouse=
+        app.run()
+    finally:
+        _mouse_off()
+
+
+if __name__ == "__main__":
+    _run()
