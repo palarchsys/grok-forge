@@ -103,8 +103,14 @@ else
     say "Mise a jour $FORGE_HOME"
     git -C "$FORGE_HOME" pull --ff-only || true
   else
-    REPO="$(ask "URL Git du depot outils Grok Forge" "$FORGE_REPO_DEFAULT")"
-    git clone --depth 1 --branch "$FORGE_REF" "$REPO" "$FORGE_HOME" || git clone --depth 1 "$REPO" "$FORGE_HOME"
+    # Outillage public (menu grok-forge). PAS l'URL d'un projet utilisateur.
+    REPO="${FORGE_REPO:-$FORGE_REPO_DEFAULT}"
+    say "Telechargement de l'outillage Grok Forge"
+    say "  $REPO"
+    say "(ce n'est pas l'URL de tes projets — Entrée / défaut suffisait)"
+    git clone --depth 1 --branch "$FORGE_REF" "$REPO" "$FORGE_HOME" \
+      || git clone --depth 1 "$REPO" "$FORGE_HOME" \
+      || die "clone outillage impossible. Verifie le reseau."
   fi
 fi
 [[ -f "$FORGE_HOME/setup-grok-forge.sh" ]] || die "setup-grok-forge.sh absent"
