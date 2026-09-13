@@ -5,9 +5,14 @@ Souris volontairement coupee : GNOME Terminal + mode 1003 envoie des
 sequences SGR `CSI < 35 ; x ; y M` (mouvement). Si elles ne sont pas
 parsees, elles s'affichent en clair dans le Header et saturent stdin —
 plus aucune touche n'arrive au menu.
+
+Workers Textual 2+ : une fonction sync sans thread=True leve
+WorkerError ("non-async function as an async worker"). Les taches
+longues (forge, clone) sont donc async, le sous-processus tourne
+via asyncio sans bloquer le rendu.
 """
 from __future__ import annotations
-import atexit, os, shutil, subprocess, sys
+import asyncio, atexit, os, shutil, subprocess, sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -76,9 +81,21 @@ _ensure_textual()
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal
+from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
-from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, OptionList, RichLog, Static
+from textual.widgets import (
+    Button,
+    Checkbox,
+    Footer,
+    Header,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    OptionList,
+    RichLog,
+    Static,
+)
 from textual.widgets.option_list import Option
 
 BACKEND = HERE / "setup-grok-forge.sh"
@@ -88,13 +105,47 @@ CSS = """
 Screen { background: #141414; color: #e1e1e1; }
 Header { background: #0c0c0c; color: #bb9af7; }
 Footer { background: #0c0c0c; color: #6c6c6c; }
-#brand { color: #bb9af7; text-style: bold; padding: 1 2; }
-.panel { border: tall #242424; background: #111111; margin: 0 2 1 2; padding: 1 2; }
+#brand { color: #bb9af7; text-style: bold; padding: 1 2 0 2; }
+.panel { border: tall #242424; background: #111111; margin: 0 2 1 2; padding: 0 2; color: #8a8a8a; }
 #hint { color: #8a8a8a; padding: 0 2 1 2; }
-OptionList { height: 12; margin: 0 2 1 2; }
+#hub-row { height: 1fr; margin: 0 2 1 2; }
+#menu { width: 3fr; height: 1fr; background: #111111; border: tall #242424; }
+#menu:focus { border: tall #7aa2f7; }
+ListView > ListItem {
+    background: #161616;
+    padding: 1 2;
+    height: 5;
+    margin: 0 1 1 1;
+    border-left: wide #2a2a2a;
+}
+ListView > ListItem.-highlight {
+    background: #1a2333;
+    border-left: wide #7aa2f7;
+}
+.card-title { color: #e1e1e1; text-style: bold; }
+.card-blurb { color: #8a8a8a; }
+#hub-detail { width: 2fr; height: 1fr; border: tall #242424; background: #111111; padding: 1 2; margin-left: 1; }
+#detail-kicker { color: #7aa2f7; text-style: bold; }
+#detail-title { color: #e1e1e1; text-style: bold; padding-top: 1; }
+#detail-body { color: #a0a0a0; padding-top: 1; }
+#detail-help { color: #6c6c6c; padding-top: 2; }
+.field-label { color: #8a8a8a; padding: 0 2; }
+Input { margin: 0 2 1 2; }
+Checkbox { margin: 0 2; }
+Button { margin: 1 2; }
+OptionList { height: 1fr; margin: 0 2 1 2; background: #111111; }
 OptionList:focus { border: tall #7aa2f7; }
+#kind-list { height: 12; margin: 0 2 1 2; }
 #log { height: 1fr; margin: 0 2 1 2; background: #0a0a0a; }
 """
+
+KIND_LABELS = {
+    "1": "Python CLI — outil, scripts, paquet",
+    "2": "API Python — FastAPI par defaut",
+    "3": "npm / Vite — app Node, frontend",
+    "4": "Fullstack — backend Python + frontend npm",
+    "5": "Linux — scripts et units systemd",
+}
 
 
 def sh(cmd, cwd=None):
@@ -132,7 +183,7 @@ git remote get-url origin >/dev/null 2>&1 && git push -u origin HEAD || true
 
 
 def prepare(root: Path, name: str | None = None, kind: str = "imported"):
-    """Pose le cadrage s'il manque. N'écrase jamais un AGENTS.md existant."""
+    """Pose le cadrage s'il manque. N'ecrase jamais un AGENTS.md existant."""
     root.mkdir(parents=True, exist_ok=True)
     if FRAME.exists():
         sh(["bash", str(FRAME), str(root), name or root.name, kind])
@@ -159,11 +210,14 @@ def launch(root: Path):
     os.execvp(g, [g])
 
 
-def _focus_list(screen: Screen, wid: str = "#menu") -> None:
+def _focus_menu(screen: Screen, wid: str = "#menu") -> None:
     try:
-        menu = screen.query_one(wid, OptionList)
+        menu = screen.query_one(wid)
         menu.focus()
-        if menu.option_count:
+        if isinstance(menu, ListView):
+            if len(menu.children):
+                menu.index = 0
+        elif isinstance(menu, OptionList) and menu.option_count:
             menu.highlighted = 0
     except Exception:
         pass
@@ -181,43 +235,133 @@ class St:
     local = ""
 
 
+class Card(ListItem):
+    """Ligne de menu : raccourci + titre + une ligne d'accroche."""
+
+    def __init__(self, key: str, title: str, blurb: str, action_id: str, detail: str) -> None:
+        self.key = key
+        self.card_title = title
+        self.blurb = blurb
+        self.action_id = action_id
+        self.detail = detail
+        super().__init__(
+            Static(f"{key}   {title}", classes="card-title"),
+            Static(blurb, classes="card-blurb"),
+            id="card-" + action_id,
+        )
+
+
+HUB = (
+    (
+        "1",
+        "Forger un nouveau projet",
+        "Python, npm ou fullstack — rien n'est ecrit avant ton OK.",
+        "new",
+        "Cree un depot vierge dans ~/GrokForge.\n\n"
+        "Tu choisis le nom, le type (CLI Python, API FastAPI, npm/Vite, fullstack, systemd), "
+        "la visibilite GitHub, puis tu approuves le plan (Ctrl+S).\n\n"
+        "Pose AGENTS.md (routeur) + skills + mermaid. Un cadrage deja present n'est jamais ecrase.\n\n"
+        "Ensuite : ouvrir Grok dans le projet.",
+    ),
+    (
+        "2",
+        "Cloner un repo GitHub",
+        "Tes depots → ~/GrokForge → cadrage si manquant → Grok.",
+        "clone",
+        "Liste les repos de ton compte (gh). Clone, ou git pull --ff-only s'il est deja local.\n\n"
+        "Si AGENTS.md manque, le cadrage est pose sans toucher tes fichiers.\n\n"
+        "Puis tu ouvres Grok dans ce dossier — origin est deja le bon remote.",
+    ),
+    (
+        "3",
+        "Ouvrir un projet local",
+        "Reprendre un dossier deja present dans ~/GrokForge.",
+        "local",
+        "Parcourt ~/GrokForge (dossiers git ou AGENTS.md).\n\n"
+        "Complete le cadrage seulement s'il manque, puis lance Grok Build dans ce repertoire.",
+    ),
+    (
+        "Q",
+        "Quitter",
+        "Fermer le menu. Tes projets restent en place.",
+        "quit",
+        "Quitte Grok Forge. Rien n'est detruit.\n\nRelance plus tard : grok-forge",
+    ),
+)
+
+
+def _hub_cards() -> list[Card]:
+    """Widgets neufs a chaque ecran : un ListItem n'a qu'un parent."""
+    return [Card(*row) for row in HUB]
+
+
 class Hub(Screen):
     BINDINGS = [
         Binding("q", "app.quit", "Quitter"),
-        Binding("1", "go_new", "Forger", show=False),
-        Binding("2", "go_clone", "Cloner", show=False),
-        Binding("3", "go_local", "Local", show=False),
+        Binding("1", "go_new", "Forger"),
+        Binding("2", "go_clone", "Cloner"),
+        Binding("3", "go_local", "Local"),
     ]
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield Label("Grok Forge", id="brand")
         g = "Grok OK" if which("grok") else "Grok absent"
         h = "gh OK" if which("gh") else "gh absent"
-        yield Static(f"{g}  |  {h}  |  {WORK}", classes="panel")
-        yield Static("Clavier : fleches + Entree.  1 forger  2 cloner  3 local  Q quitter.", id="hint")
-        yield OptionList(
-            Option("Forger un nouveau projet", id="new"),
-            Option("Cloner un repo GitHub et ouvrir Grok", id="clone"),
-            Option("Ouvrir un projet local", id="local"),
-            Option("Quitter", id="quit"),
-            id="menu",
+        yield Static(f"{g}   ·   {h}   ·   {WORK}", classes="panel")
+        cards = _hub_cards()
+        first = cards[0]
+        yield Horizontal(
+            ListView(*cards, id="menu"),
+            Vertical(
+                Static("Apercu", id="detail-kicker"),
+                Static(first.card_title, id="detail-title"),
+                Static(first.detail, id="detail-body"),
+                Static("Fleches pour parcourir.  Entree pour ouvrir.  1 / 2 / 3 / Q", id="detail-help"),
+                id="hub-detail",
+            ),
+            id="hub-row",
         )
         yield Footer()
 
     def on_mount(self):
-        _focus_list(self)
+        _focus_menu(self)
+        try:
+            item = self.query_one("#menu", ListView).highlighted_child
+            if isinstance(item, Card):
+                self._preview(item)
+        except Exception:
+            pass
 
-    def on_option_list_option_selected(self, e):
-        i = e.option_id
-        if i == "new":
+    def _preview(self, card: Card | None):
+        if card is None:
+            return
+        try:
+            self.query_one("#detail-kicker", Static).update("Option  " + card.key)
+            self.query_one("#detail-title", Static).update(card.card_title)
+            self.query_one("#detail-body", Static).update(card.detail)
+        except Exception:
+            pass
+
+    def _open(self, action_id: str | None):
+        if action_id == "new":
             self.app.push_screen(Form())
-        elif i == "clone":
+        elif action_id == "clone":
             self.app.push_screen(CloneP())
-        elif i == "local":
+        elif action_id == "local":
             self.app.push_screen(LocalP())
-        else:
+        elif action_id == "quit":
             self.app.exit()
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted):
+        item = event.item
+        if isinstance(item, Card):
+            self._preview(item)
+
+    def on_list_view_selected(self, event: ListView.Selected):
+        item = event.item
+        if isinstance(item, Card):
+            self._open(item.action_id)
 
     def action_go_new(self):
         self.app.push_screen(Form())
@@ -235,30 +379,65 @@ class Form(Screen):
         Binding("ctrl+s", "submit", "Forger"),
     ]
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         yield Header()
         yield Label("Nouveau projet", id="brand")
-        yield Static("Tab pour circuler. Ctrl+S ou bouton pour approuver.", classes="panel")
+        yield Static("Tab pour circuler. Ctrl+S ou le bouton pour approuver le plan.", classes="panel")
+        yield Static("Nom du projet  (dossier cree sous le parent)", classes="field-label")
         yield Input(St.name, id="name")
+        yield Static("Dossier parent", classes="field-label")
         yield Input(St.parent, id="parent")
-        yield Input(St.kind, id="kind")
+        yield Static(
+            "Type   1 Python CLI   2 API FastAPI   3 npm/Vite   4 fullstack   5 systemd",
+            classes="field-label",
+        )
+        yield OptionList(
+            Option("1  Python CLI\nOutil, scripts, paquet", id="1"),
+            Option("2  API Python\nFastAPI par defaut", id="2"),
+            Option("3  npm / Vite\nApp Node, frontend", id="3"),
+            Option("4  Fullstack\nBackend Python + frontend npm", id="4"),
+            Option("5  Linux system\nScripts et units systemd", id="5"),
+            id="kind-list",
+        )
         yield Checkbox("Repo prive", St.private, id="priv")
-        yield Checkbox("Creer GitHub + push", St.create_gh, id="gh")
-        yield Checkbox("Installer outils", St.tools, id="tools")
-        yield Checkbox("install.ps1", St.windows, id="win")
+        yield Checkbox("Creer le depot GitHub et pousser le bootstrap", St.create_gh, id="gh")
+        yield Checkbox("Installer les outils (venv / npm) pendant la forge", St.tools, id="tools")
+        yield Checkbox("Ajouter install.ps1 (Windows)", St.windows, id="win")
         yield Button("Approuver et forger", id="go")
         yield Footer()
 
     def on_mount(self):
         try:
+            kinds = self.query_one("#kind-list", OptionList)
+            kinds.highlighted = max(0, int(St.kind) - 1)
+        except Exception:
+            pass
+        try:
             self.query_one("#name", Input).focus()
         except Exception:
             pass
 
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted):
+        if event.option_list.id == "kind-list" and event.option_id:
+            St.kind = event.option_id
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected):
+        # Entree sur le type : on retient, on ne lance pas encore la forge.
+        if event.option_list.id == "kind-list" and event.option_id:
+            St.kind = event.option_id
+
     def _go(self):
         St.name = self.query_one("#name", Input).value.strip() or St.name
         St.parent = self.query_one("#parent", Input).value.strip() or St.parent
-        St.kind = self.query_one("#kind", Input).value.strip() or "4"
+        try:
+            k = self.query_one("#kind-list", OptionList)
+            if k.highlighted is not None:
+                opt = k.get_option_at_index(k.highlighted)
+                if opt.id:
+                    St.kind = opt.id
+        except Exception:
+            pass
+        St.kind = St.kind if St.kind in KIND_LABELS else "4"
         St.private = self.query_one("#priv", Checkbox).value
         St.create_gh = self.query_one("#gh", Checkbox).value
         St.tools = self.query_one("#tools", Checkbox).value
@@ -276,14 +455,19 @@ class Form(Screen):
 class RunN(Screen):
     BINDINGS = [Binding("g", "grok", "Grok"), Binding("escape", "menu", "Menu")]
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         yield Header()
-        yield Label("Forge", id="brand")
+        yield Label("Forge  ·  " + St.name, id="brand")
+        yield Static(
+            f"{KIND_LABELS.get(St.kind, St.kind)}   ·   {Path(St.parent) / St.name}",
+            classes="panel",
+        )
         yield RichLog(id="log")
         yield Horizontal(Button("Ouvrir Grok", id="g"), Button("Menu", id="m"))
         yield Footer()
 
     def on_mount(self):
+        # async worker (Textual 2+) : _run est une coroutine
         self.run_worker(self._run, exclusive=True)
 
     def _env(self):
@@ -307,21 +491,30 @@ class RunN(Screen):
         )
         return e
 
-    def _run(self):
+    async def _run(self):
         log = self.query_one("#log", RichLog)
         if not BACKEND.exists():
             log.write("backend manquant")
             return
-        p = subprocess.Popen(
-            ["bash", str(BACKEND)],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            env=self._env(),
-        )
-        for line in p.stdout:
-            log.write(line.rstrip())
-        log.write("exit %s" % p.wait())
+        log.write("forge de " + St.name + " …")
+        try:
+            p = await asyncio.create_subprocess_exec(
+                "bash",
+                str(BACKEND),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                env=self._env(),
+            )
+        except OSError as err:
+            log.write(str(err))
+            return
+        assert p.stdout is not None
+        while True:
+            line = await p.stdout.readline()
+            if not line:
+                break
+            log.write(line.decode(errors="replace").rstrip())
+        log.write("exit %s" % await p.wait())
 
     def on_button_pressed(self, e):
         if e.button.id == "g":
@@ -339,19 +532,26 @@ class RunN(Screen):
 class CloneP(Screen):
     BINDINGS = [Binding("escape", "app.pop_screen", "Retour")]
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         yield Header()
-        yield Label("Repos GitHub", id="brand")
-        yield Static("Fleches + Entree. Echap pour revenir.", id="hint")
+        yield Label("Cloner un repo GitHub", id="brand")
+        yield Static(
+            "Tes depots (gh). Entree : clone ou pull vers ~/GrokForge, cadrage si manquant, puis Grok.",
+            id="hint",
+        )
         rs = gh_repos()
         if not rs:
-            yield Static("Aucun repo. Connecte gh.", classes="panel")
+            yield Static("Aucun repo visible. Connecte GitHub : gh auth login", classes="panel")
         else:
-            yield OptionList(*[Option(r, id=r) for r in rs], id="menu")
+            opts = []
+            for r in rs:
+                name = r.split("/")[-1]
+                opts.append(Option(f"{name}\n{r}", id=r))
+            yield OptionList(*opts, id="menu")
         yield Footer()
 
     def on_mount(self):
-        _focus_list(self)
+        _focus_menu(self)
 
     def on_option_list_option_selected(self, e):
         St.repo = e.option_id or ""
@@ -362,9 +562,9 @@ class CloneP(Screen):
 class CloneR(Screen):
     BINDINGS = [Binding("g", "grok", "Grok"), Binding("escape", "menu", "Menu")]
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         yield Header()
-        yield Label("Clone " + St.repo, id="brand")
+        yield Label("Clone  ·  " + St.repo, id="brand")
         yield RichLog(id="log")
         yield Horizontal(Button("Ouvrir Grok", id="g"), Button("Menu", id="m"))
         yield Footer()
@@ -372,21 +572,26 @@ class CloneR(Screen):
     def on_mount(self):
         self.run_worker(self._run, exclusive=True)
 
-    def _run(self):
+    async def _run(self):
         log = self.query_one("#log", RichLog)
         name = St.repo.split("/")[-1]
         dest = WORK / name
         WORK.mkdir(parents=True, exist_ok=True)
         if dest.exists():
-            log.write("present — pull si plus recent")
-            p = sh(["git", "pull", "--ff-only"], cwd=dest)
+            log.write("deja present — pull si origin a avance")
+            p = await asyncio.to_thread(sh, ["git", "pull", "--ff-only"], dest)
         else:
-            p = sh(["gh", "repo", "clone", St.repo, str(dest)])
-        log.write((p.stdout or "") + (p.stderr or ""))
+            log.write("clone de " + St.repo)
+            p = await asyncio.to_thread(sh, ["gh", "repo", "clone", St.repo, str(dest)])
+        out = ((p.stdout or "") + (p.stderr or "")).strip()
+        if out:
+            log.write(out)
         if dest.exists():
-            prepare(dest, name=name, kind="imported")
+            await asyncio.to_thread(prepare, dest, name, "imported")
             St.local = str(dest)
-            log.write("ok " + str(dest))
+            log.write("pret  " + str(dest))
+        else:
+            log.write("echec du clone")
 
     def on_button_pressed(self, e):
         if e.button.id == "g" and St.local:
@@ -405,19 +610,22 @@ class CloneR(Screen):
 class LocalP(Screen):
     BINDINGS = [Binding("escape", "app.pop_screen", "Retour")]
 
-    def compose(self):
+    def compose(self) -> ComposeResult:
         yield Header()
-        yield Label("Local", id="brand")
-        yield Static("Fleches + Entree. Echap pour revenir.", id="hint")
+        yield Label("Projet local", id="brand")
+        yield Static("Dossiers deja dans ~/GrokForge. Entree : cadrage si besoin, puis Grok.", id="hint")
         ps = local_projects()
         if not ps:
-            yield Static("Vide", classes="panel")
+            yield Static("Aucun projet pour l'instant. Forge-en un, ou clone un repo.", classes="panel")
         else:
-            yield OptionList(*[Option(str(p), id=str(p)) for p in ps], id="menu")
+            yield OptionList(
+                *[Option(f"{p.name}\n{p}", id=str(p)) for p in ps],
+                id="menu",
+            )
         yield Footer()
 
     def on_mount(self):
-        _focus_list(self)
+        _focus_menu(self)
 
     def on_option_list_option_selected(self, e):
         if e.option_id:
@@ -444,7 +652,6 @@ def _run() -> None:
     try:
         app.run(mouse=False)
     except TypeError:
-        # textual trop vieux pour l'argument mouse=
         app.run()
     finally:
         _mouse_off()

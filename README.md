@@ -26,7 +26,7 @@ Il va, dans l’ordre, si ce n’est pas déjà fait :
 2. Installer **GitHub CLI** (`gh`) et proposer `gh auth login`
 3. Installer **Grok Build** (`curl -fsSL https://x.ai/cli/install.sh | bash`)
 4. Proposer **uv** (Python) et **Node LTS** via fnm
-5. Cloner / **mettre à jour** (`git pull --ff-only`) cet outillage dans `~/.local/share/grok-forge`
+5. Cloner / **mettre à jour** cet outillage dans `~/.local/share/grok-forge` (`git reset --hard origin/main` : c’est un clone d’outils, pas un projet)
 6. Créer un **venv** pour le menu (`textual`) — jamais `pip install --user` (Ubuntu PEP 668)
 7. Créer la commande `grok-forge` dans `~/.local/bin`
 
@@ -38,14 +38,14 @@ Les fois suivantes :
 grok-forge
 ```
 
-Le lanceur **tire tout seul** une mise à jour `ff-only` si `origin/main` a avancé, puis ouvre le menu.
+Le lanceur **tire tout seul** une mise à jour si `origin/main` a avancé (reset hard du clone d’outillage), puis ouvre le menu.
 
 **Clavier uniquement** : flèches haut/bas + Entrée (ou `1` / `2` / `3`). `Q` quitte. La souris est coupée exprès — sous GNOME Terminal elle envoyait des codes `^[[<35;…M` qui s’écrivaient dans la barre du haut et bloquaient les touches.
 
-Pour forcer une mise à jour manuelle :
+Pour forcer une mise à jour manuelle (clone d’**outillage** seulement — tes projets dans `~/GrokForge` ne bougent pas) :
 
 ```bash
-cd ~/.local/share/grok-forge && git pull --ff-only && grok-forge
+cd ~/.local/share/grok-forge && git fetch origin && git reset --hard origin/main && grok-forge
 ```
 
 ---
@@ -79,13 +79,14 @@ Détail : [`docs/lifecycle.md`](docs/lifecycle.md). Carte : [`docs/map.md`](docs
 
 ## Menu principal
 
-Navigation : **flèches + Entrée**. Raccourcis : `1` forger, `2` cloner, `3` local, `Q` quitter. Échap revient d’un écran. Souris ignorée (voir plus haut).
+Navigation : **flèches + Entrée**. Un **aperçu** à droite décrit l’option surlignée. Raccourcis : `1` forger, `2` cloner, `3` local, `Q` quitter. Échap revient d’un écran. Souris ignorée (voir plus haut).
 
 | Choix | Effet |
 | --- | --- |
-| **Forger un nouveau projet** | Assistant (nom, type, options) → **plan à approuver** (`Ctrl+S`) → fichiers, venv / npm, `install.sh`, **AGENTS.md routeur + skills + mermaid**, repo GitHub créé ou branché, push initial |
-| **Cloner un repo de mon GitHub** | Liste tes dépôts → clone (ou `git pull --ff-only` s’il est déjà là) → pose le cadrage **s’il manque** → ouvrir Grok |
+| **Forger un nouveau projet** | Nouveau dépôt dans `~/GrokForge` : nom, type (CLI Python, API FastAPI, npm/Vite, fullstack, systemd), options GitHub. **Plan à approuver** (`Ctrl+S`) avant toute écriture. Pose AGENTS.md routeur + skills + mermaid. Un cadrage déjà présent n’est jamais écrasé. |
+| **Cloner un repo GitHub** | Liste tes dépôts → clone (ou `git pull --ff-only` s’il est déjà là) → pose le cadrage **s’il manque** → ouvrir Grok |
 | **Ouvrir un projet local** | Liste `~/GrokForge` → cadrage si besoin → `grok` |
+| **Quitter** | Ferme le menu. Tes projets restent. |
 
 Rien n’est écrit tant que tu n’as pas **approuvé le plan** (nouveau projet). Un `AGENTS.md` déjà présent n’est **jamais écrasé**.
 
@@ -109,7 +110,7 @@ Chaque projet reçoit notamment :
 - `install.ps1` seulement si tu as coché Windows
 - socle Python / npm selon le type
 
-Les **projets** vivent dans `~/GrokForge/`.
+Les **projets** vivent dans `~/GrokForge/`.  
 L’**outillage** (ce dépôt) vit dans `~/.local/share/grok-forge`.
 
 ---
@@ -123,7 +124,7 @@ L’**outillage** (ce dépôt) vit dans `~/.local/share/grok-forge`.
 
 ### Repo déjà existant
 
-Menu → cloner → `gh repo clone` (ou pull si le dossier existe).
+Menu → cloner → `gh repo clone` (ou pull si le dossier existe).  
 Le remote `origin` est déjà le bon. Grok ouvre **dans** ce dossier.
 
 ### Fin de session
@@ -186,7 +187,7 @@ Aucun secret n’est stocké dans ce dépôt. L’auth GitHub passe par `gh` sur
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-**`externally-managed-environment` / `No module named 'textual'`**
+**`externally-managed-environment` / `No module named 'textual'`**  
 Ubuntu 26.04 bloque `pip install --user`. Relance l’installateur : le menu vit dans son propre venv (`~/.local/share/grok-forge/.venv`).
 
 ```bash
@@ -203,11 +204,23 @@ curl -fsSL https://x.ai/cli/install.sh | bash
 
 **La TUI ne s’ouvre pas après `curl | bash`** — tape `grok-forge`.
 
-**Codes `^[[<35;…M` dans la barre du haut, clavier mort**
+**`git pull --ff-only` refuse (install.sh / setup-grok-forge « modifiés »)**  
+C’est le clone d’**outillage**, pas un projet. Un `chmod +x` d’une install précédente suffit à bloquer le pull. Reset :
+
+```bash
+cd ~/.local/share/grok-forge && git fetch origin && git reset --hard origin/main && grok-forge
+```
+
+`~/GrokForge` n’est pas touché.
+
+**La forge plante (`WorkerError` / `non-async function as an async worker`)**  
+Ancien menu. Mets à jour comme ci-dessus, puis relance `grok-forge`.
+
+**Codes `^[[<35;…M` dans la barre du haut, clavier mort**  
 Le terminal avait le tracking souris (mode 1003). C’est corrigé : mets à jour puis relance.
 
 ```bash
-cd ~/.local/share/grok-forge && git pull --ff-only && grok-forge
+cd ~/.local/share/grok-forge && git fetch origin && git reset --hard origin/main && grok-forge
 ```
 
 Ensuite **flèches + Entrée** (la souris est ignorée exprès). `Q` quitte. `1` / `2` / `3` pour les trois actions.

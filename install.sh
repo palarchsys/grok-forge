@@ -105,7 +105,15 @@ if [[ -n "${SELF_DIR}" && -f "${SELF_DIR}/setup-grok-forge.sh" && -f "${SELF_DIR
 else
   if [[ -d "$FORGE_HOME/.git" ]]; then
     say "Mise a jour de l'outillage"
-    git -C "$FORGE_HOME" pull --ff-only || true
+    git -C "$FORGE_HOME" fetch --depth 1 origin "$FORGE_REF" 2>/dev/null || true
+    # Clone d'outillage (pas un projet) : on ecrase chmod / restes d'install.
+    # Un pull --ff-only refuse si install.sh a ete rendu executable localement.
+    if git -C "$FORGE_HOME" rev-parse --verify FETCH_HEAD >/dev/null 2>&1; then
+      git -C "$FORGE_HOME" reset --hard FETCH_HEAD \
+        || git -C "$FORGE_HOME" pull --ff-only || true
+    else
+      git -C "$FORGE_HOME" pull --ff-only || true
+    fi
   else
     REPO="${FORGE_REPO:-$FORGE_REPO_DEFAULT}"
     say "Telechargement de l'outillage Grok Forge"
@@ -115,8 +123,8 @@ else
   fi
 fi
 [[ -f "$FORGE_HOME/setup-grok-forge.sh" ]] || die "setup-grok-forge.sh absent"
-chmod +x "$FORGE_HOME"/setup-grok-forge.sh "$FORGE_HOME"/install.sh "$FORGE_HOME"/forge_tui.py 2>/dev/null || true
-[[ -f "$FORGE_HOME/setup-grok-forge" ]] && chmod +x "$FORGE_HOME/setup-grok-forge"
+# Pas de chmod sur les fichiers suivis : ca sale le clone (100644→100755)
+# et le prochain pull --ff-only refuse. python/bash n'ont pas besoin du bit +x.
 
 ensure_tui() {
   local py="$FORGE_HOME/.venv/bin/python"
@@ -148,7 +156,8 @@ if [[ -d "\$FORGE_HOME/.git" && -z "\${FORGE_NO_UPDATE:-}" ]]; then
   LOCAL=\$(git -C "\$FORGE_HOME" rev-parse HEAD 2>/dev/null || true)
   REMOTE=\$(git -C "\$FORGE_HOME" rev-parse FETCH_HEAD 2>/dev/null || true)
   if [[ -n "\$LOCAL" && -n "\$REMOTE" && "\$LOCAL" != "\$REMOTE" ]]; then
-    git -C "\$FORGE_HOME" pull --ff-only --quiet origin main 2>/dev/null || true
+    git -C "\$FORGE_HOME" reset --hard FETCH_HEAD >/dev/null 2>/dev/null \
+      || git -C "\$FORGE_HOME" pull --ff-only --quiet origin main 2>/dev/null || true
   fi
 fi
 PY="\$FORGE_HOME/.venv/bin/python"
